@@ -1,0 +1,477 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState, useEffect } from 'react';
+import { 
+  Camera, LayoutDashboard, QrCode, MonitorPlay, Users, Settings, 
+  RefreshCw, Smartphone, LogOut, ArrowRight, ShieldCheck, Download, 
+  Share2, ChevronRight, Check, Copy, MessageCircle, Instagram, Code,
+  Flame, Calendar, Sparkles, Star
+} from 'lucide-react';
+import { Event, VideoRecord, VideoLead } from './types';
+import { SpinDb } from './db';
+import AdminDashboard from './components/AdminDashboard';
+import LeadCaptureModal from './components/LeadCaptureModal';
+import CameraRecorder from './components/CameraRecorder';
+import VideoPlaybackResult from './components/VideoPlaybackResult';
+
+export default function App() {
+  // Global View Mode switcher: 'totem' (attendee flow) | 'admin' (control panel) | 'public_video' (phone preview slug)
+  const [viewMode, setViewMode] = useState<'totem' | 'admin' | 'public_video'>('totem');
+
+  // Database tick to force re-render
+  const [dbTick, setDbTick] = useState(0);
+
+  // Totem sub-state: 'selection' | 'lead' | 'recorder' | 'result'
+  const [totemState, setTotemState] = useState<'selection' | 'lead' | 'recorder' | 'result'>('selection');
+  
+  // Selected Event & Active Lead
+  const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
+  const [activeLead, setActiveLead] = useState<VideoLead | null>(null);
+  const [generatedVideo, setGeneratedVideo] = useState<VideoRecord | null>(null);
+
+  // Public Video Slug View (from scanning simulation or manual click)
+  const [publicSlug, setPublicSlug] = useState<string>('e8g4b'); // default seeded video for preview
+  const [pbCopied, setPbCopied] = useState(false);
+  const [pbDownloadSuccess, setPbDownloadSuccess] = useState(false);
+
+  // Parse path url for direct video/slug link route
+  useEffect(() => {
+    const path = window.location.pathname;
+    const searchParams = new URLSearchParams(window.location.search);
+    const queryV = searchParams.get('v');
+
+    if (path.startsWith('/video/')) {
+      const slug = path.split('/video/')[2] || path.split('/video/')[1];
+      if (slug) {
+        setPublicSlug(slug);
+        setViewMode('public_video');
+      }
+    } else if (queryV) {
+      setPublicSlug(queryV);
+      setViewMode('public_video');
+    }
+  }, []);
+
+  const triggerDbReload = () => {
+    setDbTick(prev => prev + 1);
+  };
+
+  // Get active events for selection
+  const activeEvents = SpinDb.getEvents().filter(e => e.status === 'active');
+  const allCompletedVideos = SpinDb.getVideos();
+
+  // Handle choosing an event from selection list
+  const handleSelectEvent = (event: Event) => {
+    setSelectedEvent(event);
+    setActiveLead(null);
+    setGeneratedVideo(null);
+
+    if (event.enableLeadCapture) {
+      setTotemState('lead');
+    } else {
+      setTotemState('recorder');
+    }
+  };
+
+  // Lead successfully captured
+  const handleLeadFormComplete = (lead: VideoLead) => {
+    setActiveLead(lead);
+    setTotemState('recorder');
+  };
+
+  // Video render pipeline successfully complete
+  const handleRecordingSuccess = (video: VideoRecord) => {
+    setGeneratedVideo(video);
+    setTotemState('result');
+    triggerDbReload();
+  };
+
+  // Reset to totem selection
+  const handleResetTotemFlow = () => {
+    setSelectedEvent(null);
+    setActiveLead(null);
+    setGeneratedVideo(null);
+    setTotemState('selection');
+    triggerDbReload();
+  };
+
+  // View public page from QR action simulator
+  const handleNavigateToPublicPreview = (slug: string) => {
+    setPublicSlug(slug);
+    setViewMode('public_video');
+  };
+
+  // Direct download track for public slug page
+  const handlePublicDownload = (vid: VideoRecord) => {
+    SpinDb.registerDownload(vid.id);
+    setPbDownloadSuccess(true);
+    
+    const link = document.createElement('a');
+    link.href = vid.url;
+    link.target = '_blank';
+    link.download = `Spin360_Clip_${vid.slug}.mp4`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    setTimeout(() => setPbDownloadSuccess(false), 3000);
+  };
+
+  // Direct share track for public slug page
+  const handlePublicShare = (vid: VideoRecord, channel: any) => {
+    SpinDb.registerShare(vid.id, channel);
+    if (channel === 'link') {
+      const shareUrl = `${window.location.origin}?v=${vid.slug}`;
+      navigator.clipboard.writeText(shareUrl);
+      setPbCopied(true);
+      setTimeout(() => setPbCopied(false), 2000);
+    } else {
+      alert(`Compartilhamento simulado com canal: ${channel.toUpperCase()}`);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col justify-between">
+      
+      {/* GLOBAL SYSTEM HEADER */}
+      <header className="bg-slate-900 border-b border-slate-800 px-4 py-3 sticky top-0 z-50 shadow-md">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-3">
+          
+          {/* Logo Brand */}
+          <div className="flex items-center gap-2.5 cursor-pointer" onClick={handleResetTotemFlow}>
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-500 via-purple-600 to-pink-500 flex items-center justify-center shadow-lg shadow-indigo-950/45 border border-indigo-400/20">
+              <Camera className="w-5.5 h-5.5 text-white animate-pulse" />
+            </div>
+            <div>
+              <div className="flex items-center gap-1.5">
+                <h1 className="text-lg font-display font-black text-white tracking-tight">SPIN 360</h1>
+                <span className="text-[9px] bg-indigo-900/40 text-indigo-400 px-1.5 py-0.5 rounded border border-indigo-700/30 uppercase font-bold tracking-wider font-mono">PWA</span>
+              </div>
+              <p className="text-[10px] text-slate-400 font-mono">ArtTech Promotional Engine v1.0</p>
+            </div>
+          </div>
+
+          {/* VIEW MODE TOGGLE RAIL */}
+          <div className="flex items-center bg-slate-950 p-1.5 rounded-2xl border border-slate-850 text-xs font-medium gap-1">
+            <button 
+              onClick={() => {
+                setViewMode('totem');
+                handleResetTotemFlow();
+              }}
+              style={{ contentVisibility: 'auto' }}
+              className={`px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer ${viewMode === 'totem' ? 'bg-indigo-600 text-white shadow font-bold' : 'text-slate-400 hover:text-white'}`}>
+              <MonitorPlay className="w-3.5 h-3.5" />
+              <span>Totem de Gravação</span>
+            </button>
+
+            <button 
+              onClick={() => setViewMode('admin')}
+              className={`px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer ${viewMode === 'admin' ? 'bg-indigo-600 text-white shadow font-bold' : 'text-slate-400 hover:text-white'}`}>
+              <LayoutDashboard className="w-3.5 h-3.5" />
+              <span>Painel Admin</span>
+            </button>
+
+            <button 
+              onClick={() => {
+                setViewMode('public_video');
+                // Select first completed video to preview
+                const allVids = SpinDb.getVideos();
+                if (allVids.length > 0) setPublicSlug(allVids[0].slug);
+              }}
+              className={`px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer ${viewMode === 'public_video' ? 'bg-indigo-600 text-white shadow font-bold' : 'text-slate-400 hover:text-white'}`}>
+              <Smartphone className="w-3.5 h-3.5" />
+              <span>Página de Download</span>
+            </button>
+          </div>
+
+          {/* Quick Support Tag */}
+          <div className="hidden lg:flex items-center gap-2 text-slate-500 font-mono text-[10px]">
+            <span>OPERADOR: jqcjunior1981</span>
+            <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+          </div>
+
+        </div>
+      </header>
+
+      {/* CORE ACTIVE SCENE */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 py-8">
+        
+        {/* VIEW MODE: ATTEMDEE/TOTEM INGRESS OVERVIEW */}
+        {viewMode === 'totem' && (
+          <div className="h-full">
+            
+            {/* SUBSTATE: Selection of active events */}
+            {totemState === 'selection' && (
+              <div className="space-y-8 animate-fade-in">
+                
+                {/* Greetings Banner */}
+                <div className="text-center space-y-3 py-4 max-w-xl mx-auto">
+                  <div className="inline-flex items-center gap-1.5 bg-indigo-500/10 text-indigo-400 px-3 py-1 rounded-full text-[10px] font-bold font-mono tracking-widest uppercase border border-indigo-500/20">
+                    <Star className="w-3.5 h-3.5 fill-current" /> Ativação de Marca Spin 360
+                  </div>
+                  <h2 className="text-3xl font-display font-extrabold text-white tracking-tight sm:text-4xl">
+                    Selecione o seu Evento
+                  </h2>
+                  <p className="text-slate-400 text-sm">
+                    Grave de forma rápida um vídeo em câmera lenta com moldura e música, e retire o arquivo pelo QR Code em 5 segundos!
+                  </p>
+                </div>
+
+                {/* Grid of active events */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {activeEvents.map((e) => (
+                    <div 
+                      key={e.id}
+                      className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl flex flex-col justify-between hover:border-slate-700 transition-all group p-1.5">
+                      
+                      {/* Event cover picture */}
+                      <div className="relative aspect-video rounded-2xl overflow-hidden bg-slate-950">
+                        {e.coverUrl ? (
+                          <img referrerPolicy="no-referrer" src={e.coverUrl} alt={e.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                        ) : (
+                          <div className="w-full h-full bg-slate-950 flex items-center justify-center">
+                            <Camera className="w-8 h-8 text-slate-800" />
+                          </div>
+                        )}
+                        <div className="absolute top-3 left-3 bg-slate-950/80 backdrop-blur-md px-2.5 py-1 rounded-xl text-[9px] font-mono tracking-widest font-bold uppercase text-amber-500 border border-slate-800">
+                          {e.category}
+                        </div>
+                      </div>
+
+                      <div className="p-4 space-y-1.5 flex-1 mt-2">
+                        <h3 className="text-white text-lg font-display font-bold leading-snug group-hover:text-indigo-400 transition-colors">
+                          {e.name}
+                        </h3>
+                        <p className="text-slate-400 text-xs line-clamp-2">
+                          {e.description || 'Nenhuma descrição fornecida para este evento.'}
+                        </p>
+                      </div>
+
+                      {/* Footer statistics and join button */}
+                      <div className="p-4 bg-slate-950/60 rounded-2xl mx-1.5 mb-1.5 flex justify-between items-center text-xs">
+                        <span className="font-mono text-slate-500 flex items-center gap-1">
+                          <Flame className="w-3.5 h-3.5 text-red-500" /> Totem Ativo
+                        </span>
+                        
+                        <button
+                          onClick={() => handleSelectEvent(e)}
+                          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold font-mono text-[11px] tracking-wider transition-all flex items-center gap-1 shadow-lg shadow-indigo-950/30 cursor-pointer">
+                          <span>GRAVAR VÍDEO</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                    </div>
+                  ))}
+
+                  {/* Empty state when no events are active */}
+                  {activeEvents.length === 0 && (
+                    <div className="col-span-full bg-slate-900 border border-slate-800 p-8 rounded-3xl text-center space-y-3">
+                      <p className="text-slate-400 text-xs font-mono">
+                        Nenhum evento registrado comercialmente com status &quot;Ativo&quot; no momento.
+                      </p>
+                      <button 
+                        onClick={() => setViewMode('admin')}
+                        className="bg-indigo-600 text-white px-3.5 py-2 rounded-xl text-xs font-bold font-mono cursor-pointer">
+                        Ir ao Painel de Eventos para Ativar
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Finished recordings logs list for quick access preview */}
+                {allCompletedVideos.length > 0 && (
+                  <div className="border-t border-slate-850 pt-8 mt-12 bg-slate-900/30 p-6 rounded-3xl border border-slate-800/80">
+                    <h3 className="text-white text-sm font-mono uppercase tracking-widest mb-4 flex items-center gap-2">
+                      <QrCode className="w-4.5 h-4.5 text-indigo-400" /> Galeria de Registros Recentes (Emulador)
+                    </h3>
+                    
+                    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-4">
+                      {allCompletedVideos.slice(-6).map((vid) => {
+                        const evt = SpinDb.getEvents().find(ex => ex.id === vid.eventId);
+                        return (
+                          <div 
+                            key={vid.id}
+                            style={{ borderTopColor: evt?.themeColor || '#6366f1' }}
+                            className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden p-2 flex flex-col justify-between border-t-4 hover:border-slate-600 cursor-pointer transition-all"
+                            onClick={() => handleNavigateToPublicPreview(vid.slug)}>
+                            
+                            <div className="aspect-[9/16] bg-slate-900 rounded-lg overflow-hidden relative">
+                              <video src={vid.url} muted playsInline className="w-full h-full object-cover" />
+                              <div className="absolute inset-0 bg-black/40 flex items-center justify-center p-1 text-center">
+                                <span className="text-[10px] bg-slate-950 border border-slate-850 text-indigo-400 font-mono p-1 rounded font-bold">
+                                  slug: {vid.slug}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="text-[10px] font-mono mt-2 flex justify-between text-slate-500">
+                              <span>🌍 {vid.viewsCount} views</span>
+                              <span>💾 {vid.downloadsCount} dls</span>
+                            </div>
+
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+              </div>
+            )}
+
+            {/* SUBSTATE: Lead form validation */}
+            {totemState === 'lead' && selectedEvent && (
+              <LeadCaptureModal 
+                event={selectedEvent}
+                onLeadCaptured={handleLeadFormComplete}
+                onCancel={handleResetTotemFlow}
+              />
+            )}
+
+            {/* SUBSTATE: Active Camera recording screen */}
+            {totemState === 'recorder' && selectedEvent && (
+              <CameraRecorder 
+                event={selectedEvent}
+                lead={activeLead}
+                onRecordingComplete={handleRecordingSuccess}
+                onCancel={handleResetTotemFlow}
+              />
+            )}
+
+            {/* SUBSTATE: Post-rendered share result */}
+            {totemState === 'result' && generatedVideo && selectedEvent && (
+              <VideoPlaybackResult 
+                video={generatedVideo}
+                event={selectedEvent}
+                onRecordAgain={handleResetTotemFlow}
+              />
+            )}
+
+          </div>
+        )}
+
+        {/* VIEW MODE: OPERATOR WORKSPACE (CRUDS & METRICS) */}
+        {viewMode === 'admin' && (
+          <AdminDashboard 
+            onSelectEventForCapture={(evt) => {
+              // Direct launcher launch on active selection
+              setSelectedEvent(evt);
+              setViewMode('totem');
+              if (evt.enableLeadCapture) {
+                setTotemState('lead');
+              } else {
+                setTotemState('recorder');
+              }
+            }}
+          />
+        )}
+
+        {/* VIEW MODE: PUBLIC VIDEO STREAM GATEWAY (MOCK SMARTPHONE SITE) */}
+        {viewMode === 'public_video' && (
+          <div className="max-w-md mx-auto bg-slate-900 border border-slate-850 rounded-[40px] p-6 shadow-2xl space-y-6 text-center border-l-[6px] border-l-indigo-600">
+            
+            {(() => {
+              const currentVideo = SpinDb.getVideoBySlug(publicSlug) || SpinDb.getVideos()[0];
+              if (!currentVideo) {
+                return (
+                  <div className="text-xs font-mono text-slate-500 py-12">
+                    Não há vídeos gravados para visualizar. Realize uma gravação no Totem primeiro.
+                  </div>
+                );
+              }
+
+              const associatedEvt = SpinDb.getEvents().find(ex => ex.id === currentVideo.eventId);
+              const matchingFrame = SpinDb.getFrames().find(fx => fx.id === currentVideo.frameAppliedId);
+
+              return (
+                <div className="space-y-6">
+                  
+                  {/* Top phone header layout */}
+                  <div className="space-y-1.5">
+                    <span className="text-[10px] font-mono bg-emerald-950/80 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-full uppercase font-bold tracking-wider">
+                      ✓ Vídeo Verificado Legal (LGPD)
+                    </span>
+                    <h3 className="text-xl font-display font-extrabold text-white pt-2">
+                      Portal do Participante • Download
+                    </h3>
+                    <p className="text-xs text-indigo-400 font-mono">Vídeo Slug Especial: {currentVideo.slug}</p>
+                  </div>
+
+                  {/* HTML5 video wrapper */}
+                  <div className="relative aspect-[9/16] w-full max-w-[270px] mx-auto rounded-3xl overflow-hidden border-4 border-slate-950 shadow-lg bg-slate-950">
+                    <video src={currentVideo.url} controls autoPlay loop className="w-full h-full object-cover" />
+                  </div>
+
+                  <div className="bg-slate-950/80 border border-slate-850 rounded-2xl p-4 text-left space-y-2">
+                    <h4 className="text-xs font-bold text-white font-mono block">MÉTRICAS DO SEU CONTEÚDO:</h4>
+                    <p className="text-[11px] text-slate-400 leading-snug">
+                      Gerado na Ativação: <strong className="text-white">{associatedEvt?.name || 'Festival Geral'}</strong>
+                    </p>
+                    <p className="text-[11px] text-slate-400 leading-snug">
+                      Trilha sonora: <strong className="text-indigo-400 font-mono">{associatedEvt?.musicId || 'Som ambiente'}</strong>
+                    </p>
+                    <div className="flex justify-between items-center border-t border-slate-900 pt-2 text-[10px] font-mono text-slate-500">
+                      <span>👁 {currentVideo.viewsCount} visualizações</span>
+                      <span>💾 {currentVideo.downloadsCount} salvos</span>
+                    </div>
+                  </div>
+
+                  {/* Core public page buttons */}
+                  <div className="space-y-2">
+                    <button 
+                      onClick={() => handlePublicDownload(currentVideo)}
+                      className="w-full py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-90 rounded-xl text-xs font-bold font-mono tracking-wider text-white uppercase flex items-center justify-center gap-1 shadow-lg cursor-pointer">
+                      <Download className="w-4 h-4" /> Download Direto (MP4)
+                    </button>
+
+                    {pbDownloadSuccess && (
+                      <p className="text-center text-[10px] text-emerald-400 font-bold font-mono animate-bounce">
+                        ✓ Download contabilizado no banco do patrocinador.
+                      </p>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-2 text-[10px] pt-1">
+                      <button 
+                        onClick={() => handlePublicShare(currentVideo, 'whatsapp')}
+                        className="py-2 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-850 text-slate-350 flex items-center justify-center gap-1 font-mono cursor-pointer">
+                        <MessageCircle className="w-3.5 h-3.5 text-emerald-500" /> WhatsApp
+                      </button>
+                      <button 
+                        onClick={() => handlePublicShare(currentVideo, 'link')}
+                        className="py-2 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-850 text-slate-350 flex items-center justify-center gap-1 font-mono cursor-pointer">
+                        {pbCopied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-indigo-400" />}
+                        {pbCopied ? 'Copiado!' : 'Copiar Link'}
+                      </button>
+                    </div>
+                  </div>
+
+                </div>
+              );
+            })()}
+
+          </div>
+        )}
+
+      </main>
+
+      {/* FOOTER METADATA BRAND MARK */}
+      <footer className="bg-slate-950 border-t border-slate-900 py-6 px-4">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4 text-xs text-slate-500 font-mono">
+          <div>
+            <p>© 2026 Spin 360 Inc. Todos os direitos reservados.</p>
+            <p className="text-[10px] text-slate-600">Desenvolvido em parceria com a agência de ativações ArtTech.</p>
+          </div>
+          <div className="flex gap-4 items-center">
+            <span className="flex items-center gap-1"><ShieldCheck className="w-4 h-4 text-emerald-500" /> RLS Ativo</span>
+            <span className="text-indigo-400">PWA Instalável</span>
+          </div>
+        </div>
+      </footer>
+
+    </div>
+  );
+}

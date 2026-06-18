@@ -1,0 +1,6 @@
+{
+  "name": "Spin 360",
+  "description": "Plataforma de gravação de vídeos promocionais para eventos com molduras, músicas, efeitos de velocidade e captura de leads.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
