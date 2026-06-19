@@ -787,10 +787,20 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
                     <div className="absolute inset-0 z-0 bg-gradient-to-tr from-slate-950 via-indigo-950/20 to-slate-950/40"></div>
                     
                     {/* Render exact micro version of frames overlay SVGs inside cards */}
-                    <div 
-                      className="absolute inset-0 pointer-events-none p-1 z-10"
-                      dangerouslySetInnerHTML={{ __html: SpinDb.getFrames().find(fex => fex.id === f.id)?.imageUrl ? (DEMO_FRAMES_SVG[f.imageUrl] || '') : '' }}
-                    />
+                    <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center overflow-hidden rounded-2xl">
+                      {f.imageUrl && f.imageUrl.startsWith('http') ? (
+                        <img
+                          src={f.imageUrl}
+                          alt={f.name}
+                          className="w-full h-full object-contain"
+                        />
+                      ) : (
+                        <div
+                          className="absolute inset-0 p-1"
+                          dangerouslySetInnerHTML={{ __html: DEMO_FRAMES_SVG[f.imageUrl] || '' }}
+                        />
+                      )}
+                    </div>
                     <span className="text-[10px] text-slate-600 font-mono z-20">Preview Overlay 9:16</span>
                   </div>
                   <div className="p-3">
