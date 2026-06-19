@@ -16,7 +16,7 @@ import AdminDashboard from './components/AdminDashboard';
 import LeadCaptureModal from './components/LeadCaptureModal';
 import CameraRecorder from './components/CameraRecorder';
 import VideoPlaybackResult from './components/VideoPlaybackResult';
-import useSupabaseSync from './useSupabaseSync';
+import useSupabaseSync from './hooks/useSupabaseSync';
 import useCatalogSync from './useCatalogSync';
 import packageInfo from '../package.json';
 
