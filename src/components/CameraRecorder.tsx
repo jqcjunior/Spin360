@@ -357,13 +357,26 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
           ctx.translate(canvas.width, 0);
           ctx.scale(-1, 1);
 
-          ctx.drawImage(
-            video,
-            0,
-            0,
-            canvas.width,
-            canvas.height
-          );
+          if (video.videoWidth > 0 && video.videoHeight > 0) {
+            const scale = Math.max(
+              canvas.width / video.videoWidth,
+              canvas.height / video.videoHeight
+            );
+            const dw = video.videoWidth * scale;
+            const dh = video.videoHeight * scale;
+            const dx = (canvas.width - dw) / 2;
+            const dy = (canvas.height - dh) / 2;
+
+            ctx.drawImage(video, dx, dy, dw, dh);
+          } else {
+            ctx.drawImage(
+              video,
+              0,
+              0,
+              canvas.width,
+              canvas.height
+            );
+          }
 
           ctx.restore();
 
@@ -501,7 +514,7 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
     }
   };
 
-  const startRecording = useCallback(() => {
+  const startRecording = useCallback(async () => {
     const canvas = canvasRef.current;
     const video = videoRef.current;
     if (!canvas || !streamRef.current) return;
@@ -563,7 +576,12 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
     }
 
     if (canvasStream && canvasStream.getVideoTracks().length > 0) {
-      mixedStream.addTrack(canvasStream.getVideoTracks()[0]);
+      const vTrack = canvasStream.getVideoTracks()[0];
+      // Correção: Forçar o encoder a respeitar o Molde Instagram (1080x1920)
+      if (vTrack.applyConstraints) {
+        vTrack.applyConstraints({ width: 1080, height: 1920 }).catch(() => {});
+      }
+      mixedStream.addTrack(vTrack);
     }
 
     // VALIDATIVE AUDIT 3 & 4: Assert we have video track before proceeding
@@ -589,28 +607,22 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
 
         try {
           audioStatusVal = 'Carregando';
-          const audio = new Audio(musicTrack.audioUrl);
-          audio.crossOrigin = 'anonymous';
+          
+          // Correção: Baixar o áudio como Blob contorna o bloqueio de CORS que deixa o vídeo mudo
+          const response = await fetch(musicTrack.audioUrl);
+          const blob = await response.blob();
+          const localAudioUrl = URL.createObjectURL(blob);
+          
+          const audio = new Audio(localAudioUrl);
           audio.loop = musicTrack.loop;
           audio.volume = musicTrack.volume || 0.8;
           audio.currentTime = musicTrack.startPoint || 0;
           activeAudioRef.current = audio;
 
-          audio.oncanplay = () => {
-            console.log('[MUSIC] Música carregada');
-          };
-          audio.onerror = (e) => {
-            console.error('[MUSIC] Música falhou', e);
-          };
-
           const musicSource = audioCtx.createMediaElementSource(audio);
           musicSource.connect(dest);
-          audio.play().then(() => {
-            console.log('[MUSIC] Play iniciado com sucesso');
-          }).catch(errPlay => {
-            console.warn('Erro autoplay música na gravação:', errPlay);
-            console.log('[MUSIC] Música falhou');
-          });
+          
+          audio.play().catch(errPlay => console.warn('Erro autoplay:', errPlay));
           audio.muted = false;
           audio.preload = 'auto';
 
@@ -651,7 +663,9 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
     // Set up standard encoder
     let recorder: MediaRecorder | null = null;
     const recorderOptionsList = [
-      { mimeType, videoBitsPerSecond: 2500000 },
+      // Correção: Aumentando de 2.5 Mbps para 8.0 Mbps para garantir qualidade HD
+      { mimeType, videoBitsPerSecond: 8000000 }, 
+      { mimeType, videoBitsPerSecond: 5000000 },
       { mimeType },
       {}
     ];
