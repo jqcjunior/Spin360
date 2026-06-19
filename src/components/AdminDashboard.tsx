@@ -205,7 +205,7 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
     setEvtEffectId('eff_01');
     setEvtColor('#6366f1');
     setEvtTotem(true);
-    setEvtLeads(true);
+    setEvtLeads(false);
     setEvtLeadFields({
       name: true, phone: true, city: false, email: true, instagram: false, company: false
     });
@@ -1100,295 +1100,180 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
               </button>
             </div>
 
-            <form onSubmit={handleEventSave} className="p-6 space-y-5 text-xs text-slate-350">
-              
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                
-                {/* Name */}
+            <form onSubmit={handleEventSave} className="p-6 space-y-4 text-xs text-slate-350">
+
+              {/* ESSENCIAL */}
+              <div className="space-y-3">
                 <div className="space-y-1">
-                  <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Nome do Evento</label>
-                  <input 
-                    type="text" 
-                    required 
-                    placeholder="e.g. Ativação Copa do Mundo 2026"
-                    value={evtName}
-                    onChange={e => setEvtName(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-indigo-500"
+                  <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Nome do Evento *</label>
+                  <input
+                    type="text" required placeholder="Ex: São João da Real Calçados 2026"
+                    value={evtName} onChange={e => setEvtName(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-3 text-white text-sm focus:outline-none focus:border-indigo-500"
                   />
                 </div>
 
-                {/* Category */}
                 <div className="space-y-1">
-                  <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Gênero / Categoria</label>
-                  <select 
-                    value={evtCategory}
-                    onChange={e => setEvtCategory(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none">
-                    <option value="Balada / Festival">Balada / Festival</option>
-                    <option value="Sazonal">Sazonal / São João</option>
-                    <option value="Casamentos">Casamentos / Evento Social</option>
-                    <option value="Corporativo">Corporativo / Marketing</option>
-                  </select>
-                </div>
-
-                {/* Description */}
-                <div className="col-span-1 sm:col-span-2 space-y-1">
-                  <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Descrição da Ativação</label>
-                  <textarea 
-                    value={evtDesc}
-                    onChange={e => setEvtDesc(e.target.value)}
-                    rows={2}
-                    placeholder="Descrição para controle de operador e relatórios do patrocinador contratante"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white placeholder-slate-700"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Data Agendada</label>
-                    <input 
-                      type="date" 
-                      value={evtDate}
-                      onChange={e => setEvtDate(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2 text-white" 
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Horário</label>
-                    <input 
-                      type="time" 
-                      value={evtTime}
-                      onChange={e => setEvtTime(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2 text-white" 
-                    />
-                  </div>
-                </div>
-
-                {/* Cover URL mockup generator select */}
-                <div className="space-y-1">
-                  <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Imagem de Banner / Capa (URL)</label>
-                  <input 
-                    type="text" 
-                    placeholder="https://images.unsplash.com/..."
-                    value={evtCover}
-                    onChange={e => setEvtCover(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white"
-                  />
-                </div>
-
-                {/* Frame linking */}
-                <div className="space-y-1">
-                  <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Moldura Vinculada <span className="text-red-500">*</span></label>
-                  <select 
-                    value={evtFrameId}
-                    onChange={e => setEvtFrameId(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none">
+                  <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Moldura Vinculada *</label>
+                  <select
+                    value={evtFrameId} onChange={e => setEvtFrameId(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white focus:outline-none">
                     <option value="">Selecione uma Moldura...</option>
-                    {frames.map(f => (
-                      <option key={f.id} value={f.id}>{f.name}</option>
-                    ))}
+                    {frames.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
                   </select>
                 </div>
 
-                {/* Track linking */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Duração do Vídeo</label>
+                    <select
+                      value={evtDuration} onChange={e => setEvtDuration(Number(e.target.value) as any)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white">
+                      <option value={5}>5 segundos</option>
+                      <option value={10}>10 segundos</option>
+                      <option value={15}>15 segundos</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Status</label>
+                    <select
+                      value={evtStatus} onChange={e => setEvtStatus(e.target.value as any)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white">
+                      <option value="draft">Rascunho</option>
+                      <option value="active">Ativo</option>
+                      <option value="paused">Pausado</option>
+                      <option value="finished">Finalizado</option>
+                    </select>
+                  </div>
+                </div>
+
                 <div className="space-y-1">
                   <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Música de Fundo</label>
-                  <select 
-                    value={evtMusicId}
-                    onChange={e => setEvtMusicId(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none">
-                    <option value="">Sem Música / Áudio Capturado</option>
-                    {tracks.map(t => (
-                      <option key={t.id} value={t.id}>{t.title} - {t.artist}</option>
-                    ))}
+                  <select
+                    value={evtMusicId} onChange={e => setEvtMusicId(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white">
+                    <option value="">Sem música</option>
+                    {tracks.map(t => <option key={t.id} value={t.id}>{t.title} — {t.artist}</option>)}
                   </select>
                 </div>
-
-                {/* Duration select */}
-                <div className="space-y-1">
-                  <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Duração do Vídeo (RN-02)</label>
-                  <select 
-                    value={evtDuration}
-                    onChange={e => setEvtDuration(Number(e.target.value) as any)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white">
-                    <option value={5}>5 Segundos</option>
-                    <option value={10}>10 Segundos</option>
-                    <option value={15}>15 Segundos</option>
-                  </select>
-                </div>
-
-                {/* Effect select */}
-                <div className="space-y-1">
-                  <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Preset de Velocidade</label>
-                  <select 
-                    value={evtEffectId}
-                    onChange={e => setEvtEffectId(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white">
-                    {SEED_EFFECTS.map(eff => (
-                      <option key={eff.id} value={eff.id}>{eff.name.split(':')[0]}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Status selector */}
-                <div className="space-y-1">
-                  <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Status de Ativação (RN-01)</label>
-                  <select 
-                    value={evtStatus}
-                    onChange={e => setEvtStatus(e.target.value as any)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white">
-                    <option value="draft">Rascunho</option>
-                    <option value="active">Ativo (Para Totem / Participante)</option>
-                    <option value="paused">Pausado (Interrompido)</option>
-                    <option value="completed">Finalizado</option>
-                    <option value="archived">Arquivado</option>
-                  </select>
-                </div>
-
-                {/* Color picking */}
-                <div className="space-y-1">
-                  <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Cor-Tema do Evento (UI)</label>
-                  <div className="flex items-center gap-2">
-                    <input 
-                      type="color" 
-                      value={evtColor}
-                      onChange={e => setEvtColor(e.target.value)}
-                      className="w-8 h-8 rounded border-none bg-transparent cursor-pointer" 
-                    />
-                    <div className="flex gap-1 flex-1">
-                      {presetThemes.map(col => (
-                        <button 
-                          key={col} 
-                          type="button"
-                          onClick={() => setEvtColor(col)}
-                          style={{ backgroundColor: col }}
-                          className={`w-5 h-5 rounded-full ${evtColor === col ? 'ring-2 ring-white scale-110' : ''}`} 
-                        />
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
               </div>
 
-              {/* SPONSOR LIST LINKINGS */}
-              <div className="p-4 bg-slate-950 rounded-2xl border border-slate-850 space-y-3">
-                <span className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Patrocinadores Conectados</span>
-                <p className="text-[10px] text-slate-500 mb-2">Selecione as marcas e defina suas posições prioritárias de renderização de logo.</p>
-                
-                <div className="space-y-2">
-                  {sponsors.map(s => {
-                    const isChecked = evtSponsorIds.includes(s.id);
-                    const config = evtSponsorConfigs[s.id] || { position: 'bottom_right', order: 1 };
-                    return (
-                      <div key={s.id} className="flex flex-wrap items-center justify-between p-2 rounded-xl bg-slate-900 border border-slate-800 gap-2">
-                        <label className="flex items-center gap-2 cursor-pointer select-none">
-                          <input 
-                            type="checkbox" 
-                            checked={isChecked}
-                            onChange={() => handleSponsorCheck(s.id)}
-                            className="rounded text-indigo-500 bg-slate-950 border-slate-800"
-                          />
-                          <img referrerPolicy="no-referrer" src={s.logoUrl} className="w-5 h-5 object-cover rounded-full" />
-                          <span className="font-bold text-white text-xs">{s.name}</span>
-                        </label>
-                        {isChecked && (
-                          <div className="flex items-center gap-2 text-[11px] font-mono">
-                            <span className="text-slate-500">Logo:</span>
-                            <select 
-                              value={config.position}
-                              onChange={e => handleSponsorPosChange(s.id, e.target.value as any)}
-                              className="bg-slate-950 text-indigo-400 border border-slate-800 rounded px-1 py-0.5">
-                              <option value="top_left">Superior Esquerdo</option>
-                              <option value="top_right">Superior Direito</option>
-                              <option value="bottom_left">Inferior Esquerdo</option>
-                              <option value="bottom_right">Inferior Direito</option>
+              {/* CONFIGURAÇÕES AVANÇADAS (colapsável) */}
+              <details className="bg-slate-950 border border-slate-800 rounded-2xl">
+                <summary className="px-4 py-3 text-[10px] font-mono font-bold text-slate-400 uppercase cursor-pointer select-none">
+                  ⚙️ Configurações Avançadas (opcional)
+                </summary>
+                <div className="px-4 pb-4 space-y-3 mt-2">
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Descrição</label>
+                    <textarea
+                      value={evtDesc} onChange={e => setEvtDesc(e.target.value)} rows={2}
+                      placeholder="Descrição do evento para relatórios"
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Data</label>
+                      <input type="date" value={evtDate} onChange={e => setEvtDate(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2 text-white" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Horário</label>
+                      <input type="time" value={evtTime} onChange={e => setEvtTime(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2 text-white" />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Imagem de Capa (URL)</label>
+                    <input type="text" placeholder="https://..." value={evtCover} onChange={e => setEvtCover(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Categoria</label>
+                    <select value={evtCategory} onChange={e => setEvtCategory(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white">
+                      <option value="Balada / Festival">Balada / Festival</option>
+                      <option value="Sazonal">Sazonal / São João</option>
+                      <option value="Casamentos">Casamentos</option>
+                      <option value="Corporativo">Corporativo / Marketing</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Efeito de Velocidade</label>
+                    <select value={evtEffectId} onChange={e => setEvtEffectId(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white">
+                      {SEED_EFFECTS.map(eff => <option key={eff.id} value={eff.id}>{eff.name.split(':')[0]}</option>)}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Cor-Tema</label>
+                    <div className="flex items-center gap-2">
+                      <input type="color" value={evtColor} onChange={e => setEvtColor(e.target.value)}
+                        className="w-8 h-8 rounded border-none bg-transparent cursor-pointer" />
+                      <div className="flex gap-1">
+                        {['#6366f1','#ca8a04','#ef4444','#d946ef','#10b981','#06b6d4'].map(col => (
+                          <button key={col} type="button" onClick={() => setEvtColor(col)}
+                            style={{ backgroundColor: col }}
+                            className={`w-5 h-5 rounded-full ${evtColor === col ? 'ring-2 ring-white scale-110' : ''}`} />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Patrocinadores</label>
+                    {sponsors.map(s => {
+                      const isChecked = evtSponsorIds.includes(s.id);
+                      const config = evtSponsorConfigs[s.id] || { position: 'bottom_right', order: 1 };
+                      return (
+                        <div key={s.id} className="flex flex-wrap items-center justify-between p-2 rounded-xl bg-slate-900 border border-slate-800 gap-2">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" checked={isChecked} onChange={() => handleSponsorCheck(s.id)} className="rounded text-indigo-500" />
+                            <span className="text-white text-xs font-bold">{s.name}</span>
+                          </label>
+                          {isChecked && (
+                            <select value={config.position} onChange={e => handleSponsorPosChange(s.id, e.target.value as any)}
+                              className="bg-slate-950 text-indigo-400 border border-slate-800 rounded px-1 py-0.5 text-[11px] font-mono">
+                              <option value="top_left">Superior Esq.</option>
+                              <option value="top_right">Superior Dir.</option>
+                              <option value="bottom_left">Inferior Esq.</option>
+                              <option value="bottom_right">Inferior Dir.</option>
                               <option value="center">Centro</option>
                             </select>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* MODES & LEAD CAPTURE SETTINGS */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                
-                <div className="p-4 bg-slate-950 rounded-2xl border border-slate-850 space-y-3">
-                  <span className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Modos Globais</span>
-                  
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input 
-                      type="checkbox" 
-                      checked={evtTotem}
-                      onChange={e => setEvtTotem(e.target.checked)}
-                      className="rounded text-indigo-500 bg-slate-900 border-slate-800"
-                    />
-                    <div>
-                      <p className="text-white font-bold">Habilitar Modo Totem (RF-25)</p>
-                      <p className="text-[10px] text-slate-500">Exibe botão gigante &quot;GRAVAR AGORA&quot; em repetição contínua.</p>
-                    </div>
-                  </label>
-
-                  <label className="flex items-center gap-2 cursor-pointer select-none pt-2 border-t border-slate-900">
-                    <input 
-                      type="checkbox" 
-                      checked={evtLeads}
-                      onChange={e => setEvtLeads(e.target.checked)}
-                      className="rounded text-indigo-500 bg-slate-900 border-slate-800"
-                    />
-                    <div>
-                      <p className="text-white font-bold">Habilitar Captura de Leads (RF-06)</p>
-                      <p className="text-[10px] text-slate-500">Força preenchimento da ficha cadastral LGPD antes da gravação.</p>
-                    </div>
-                  </label>
-                </div>
-
-                {evtLeads && (
-                  <div className="p-4 bg-slate-950 rounded-2xl border border-slate-850 space-y-2">
-                    <span className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Campos Obrigatórios de Lead (LGPD)</span>
-                    <div className="grid grid-cols-2 gap-1.5 text-[11px]">
-                      {Object.keys(evtLeadFields).map((fieldKey) => (
-                        <label key={fieldKey} className="flex items-center gap-1.5 cursor-pointer">
-                          <input 
-                            type="checkbox" 
-                            checked={(evtLeadFields as any)[fieldKey]}
-                            onChange={e => setEvtLeadFields(prev => ({ ...prev, [fieldKey]: e.target.checked }))}
-                            className="rounded text-indigo-400 bg-slate-900 border-slate-800"
-                          />
-                          <span className="capitalize">{fieldKey === 'phone' ? 'WhatsApp' : fieldKey === 'instagram' ? 'Instagram' : fieldKey}</span>
-                        </label>
-                      ))}
-                    </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
-                )}
-              </div>
 
-              {evtLeads && (
-                <div className="space-y-1">
-                  <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Termo LGPD Regulatório Geral</label>
-                  <textarea 
-                    value={evtLgpdText}
-                    onChange={e => setEvtLgpdText(e.target.value)}
-                    rows={2}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white placeholder-slate-700"
-                  />
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={evtTotem} onChange={e => setEvtTotem(e.target.checked)} className="rounded text-indigo-500" />
+                    <span className="text-white text-xs">Habilitar Modo Totem (botão gigante GRAVAR AGORA)</span>
+                  </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={evtLeads} onChange={e => setEvtLeads(e.target.checked)} className="rounded text-indigo-500" />
+                    <span className="text-white text-xs">Capturar dados do participante antes de gravar (LGPD)</span>
+                  </label>
+
                 </div>
-              )}
+              </details>
 
               <div className="flex gap-3 pt-2">
-                <button 
-                  type="button"
-                  onClick={() => setIsEventModalOpen(false)}
-                  className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl font-bold font-mono text-xs tracking-wider transition-colors">
-                  Descartar Alterações
+                <button type="button" onClick={() => setIsEventModalOpen(false)}
+                  className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl font-bold font-mono text-xs">
+                  Cancelar
                 </button>
-                <button 
-                  type="submit"
-                  className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-bold font-mono text-xs tracking-wider transition-colors shadow-lg">
-                  Salvar Evento
+                <button type="submit"
+                  className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-bold font-mono text-xs shadow-lg">
+                  {editingEvent ? 'Salvar Alterações' : 'Criar Evento'}
                 </button>
               </div>
 
