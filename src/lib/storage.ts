@@ -1,7 +1,10 @@
-import { supabase, isSupabaseConfigured } from './supabase';
+import { supabase } from './supabase';
 
 export async function uploadFile(bucket: string, file: File): Promise<string> {
-  if (!isSupabaseConfigured) {
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+  if (!supabaseUrl || !supabaseKey) {
     throw new Error('As variáveis de ambiente VITE_SUPABASE_URL ou VITE_SUPABASE_PUBLISHABLE_KEY não foram configuradas no painel do AI Studio.');
   }
 
