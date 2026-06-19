@@ -16,8 +16,12 @@ import AdminDashboard from './components/AdminDashboard';
 import LeadCaptureModal from './components/LeadCaptureModal';
 import CameraRecorder from './components/CameraRecorder';
 import VideoPlaybackResult from './components/VideoPlaybackResult';
+import useSupabaseSync from './useSupabaseSync';
 
 export default function App() {
+  // ATIVA O SINCRONIZADOR SILENCIOSO
+  useSupabaseSync();
+
   // Global View Mode switcher: 'totem' (attendee flow) | 'admin' (control panel) | 'public_video' (phone preview slug)
   const [viewMode, setViewMode] = useState<'totem' | 'admin' | 'public_video'>('totem');
 
