@@ -925,7 +925,7 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
         {/* Real-time Diagnostics HUD */}
         <div 
           id="rec-diagnostics-hud"
-          className="absolute top-20 left-4 z-50 bg-black/85 border border-slate-700/80 p-3.5 rounded-xl font-mono text-[10px] text-green-400 space-y-1.5 pointer-events-none max-w-[285px] leading-relaxed shadow-lg"
+          className="hidden absolute top-20 left-4 z-50 bg-black/85 border border-slate-700/80 p-3.5 rounded-xl font-mono text-[10px] text-green-400 space-y-1.5 pointer-events-none max-w-[285px] leading-relaxed shadow-lg"
         >
           <div className="text-[11px] font-bold text-slate-300 border-b border-slate-700/60 pb-1 mb-1.5 flex justify-between items-center">
             <span>💻 DIAGNÓSTICO AUDITORIA</span>
