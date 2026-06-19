@@ -1,63 +1,58 @@
 import { useEffect } from 'react';
-import { SpinDb } from './db';
-import { createClient } from '@supabase/supabase-js';
-
-// Inicialize seu cliente Supabase safely using env variables or placeholders
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'SUA_URL_DO_SUPABASE';
-const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'SUA_CHAVE_ANON_DO_SUPABASE';
-const supabase = createClient(supabaseUrl, supabaseKey);
+import { SpinDb } from '../db';
+import { supabase } from '../lib/supabase';
 
 export default function useSupabaseSync() {
   useEffect(() => {
     const syncVideos = async () => {
-      // Se não tiver internet, aborta silenciosamente
       if (!navigator.onLine) return;
 
       const videos = SpinDb.getVideos();
-      
-      // Busca vídeos cuja URL ainda seja um 'blob:' local (ou seja, ainda não subiram)
-      const pendingVideos = videos.filter(v => v.url.startsWith('blob:'));
+      const pending = videos.filter((v: any) => v.url && v.url.startsWith('blob:'));
 
-      for (const video of pendingVideos) {
+      for (const video of pending) {
         try {
-          // 1. Extrai o arquivo físico da memória RAM/IndexedDB usando a URL local
           const response = await fetch(video.url);
-          const videoBlob = await response.blob();
+          const blob = await response.blob();
+          const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
+          const filePath = `${video.eventId}/${video.slug}.${ext}`;
 
-          const filePath = `${video.eventId}/${video.slug}.mp4`;
+          const { error: uploadError } = await supabase.storage
+            .from('videos-processed')
+            .upload(filePath, blob, { contentType: blob.type, upsert: true });
 
-          // 2. Faz o upload em background para o Supabase
-          const { error } = await supabase.storage
-            .from('videos') // Nome do seu bucket
-            .upload(filePath, videoBlob, {
-              contentType: 'video/mp4',
-              upsert: true
-            });
+          if (uploadError) throw uploadError;
 
-          if (error) throw error;
+          const { data } = supabase.storage
+            .from('videos-processed')
+            .getPublicUrl(filePath);
 
-          // 3. Pega a URL pública permanente gerada pelo Supabase
-          const { data } = supabase.storage.from('videos').getPublicUrl(filePath);
+          const publicUrl = data.publicUrl;
 
-          // 4. Atualiza o banco local: troca o link provisório (blob) pelo link da nuvem!
-          video.url = data.publicUrl;
-          SpinDb.saveVideo(video);
-          
-          console.log(`[SYNC] Vídeo ${video.slug} salvo na nuvem com sucesso!`);
+          // Salva registro no Supabase
+          await supabase.from('videos').upsert({
+            id: video.id,
+            event_id: video.eventId,
+            lead_id: video.leadId ?? null,
+            public_slug: video.slug,
+            processed_video_url: publicUrl,
+            duration_seconds: video.duration ?? 10,
+            status: 'completed',
+            created_at: video.createdAt,
+          } as any);
 
+          // Atualiza localStorage com URL permanente
+          SpinDb.saveVideo({ ...video, url: publicUrl, status: 'completed' });
+
+          console.log(`[SYNC] ✅ ${video.slug} → ${publicUrl}`);
         } catch (err) {
-          console.error(`[SYNC] Falha ao sincronizar o vídeo ${video.slug}:`, err);
-          // Ele falha em silêncio e tenta de novo na próxima rodada do intervalo
+          console.error(`[SYNC] ❌ ${video.slug}:`, err);
         }
       }
     };
 
-    // Executa a varredura a cada 30 segundos
-    const intervalId = setInterval(syncVideos, 30000);
-    
-    // Executa uma vez assim que o app abre (caso já tenha internet)
     syncVideos();
-
-    return () => clearInterval(intervalId);
+    const id = setInterval(syncVideos, 15000);
+    return () => clearInterval(id);
   }, []);
 }
