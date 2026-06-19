@@ -36,6 +36,7 @@ export default function App() {
   const [publicSlug, setPublicSlug] = useState<string>('e8g4b'); // default seeded video for preview
   const [pbCopied, setPbCopied] = useState(false);
   const [pbDownloadSuccess, setPbDownloadSuccess] = useState(false);
+  const [showQrCode, setShowQrCode] = useState(false);
 
   // Parse path url for direct video/slug link route
   useEffect(() => {
@@ -121,15 +122,46 @@ export default function App() {
   };
 
   // Direct share track for public slug page
-  const handlePublicShare = (vid: VideoRecord, channel: any) => {
-    SpinDb.registerShare(vid.id, channel);
+  const handlePublicShare = async (vid: VideoRecord, channel: string) => {
+    SpinDb.registerShare(vid.id, channel as any);
+    const shareUrl = `${window.location.origin}?v=${vid.slug}`;
+    const shareTitle = 'Meu vídeo no Spin 360!';
+    const shareText = `Assista e baixe meu vídeo gravado na ativação Spin 360: ${shareUrl}`;
+
+    if (channel === 'whatsapp') {
+      window.open(`https://wa.me/?text=${encodeURIComponent(shareText)}`, '_blank');
+      return;
+    }
+
+    if (channel === 'airdrop' || channel === 'nearby') {
+      if (navigator.share) {
+        try {
+          await navigator.share({ title: shareTitle, text: shareText, url: shareUrl });
+        } catch (err) {
+          // Usuário cancelou ou não suportado
+        }
+      } else {
+        alert('Compartilhamento nativo não suportado neste navegador. Tente pelo Chrome ou Safari.');
+      }
+      return;
+    }
+
+    if (channel === 'instagram') {
+      navigator.clipboard.writeText(shareUrl);
+      alert('Link copiado! Cole no Instagram Stories ou Direct.');
+      return;
+    }
+
+    if (channel === 'facebook') {
+      window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}`, '_blank');
+      return;
+    }
+
     if (channel === 'link') {
-      const shareUrl = `${window.location.origin}?v=${vid.slug}`;
       navigator.clipboard.writeText(shareUrl);
       setPbCopied(true);
-      setTimeout(() => setPbCopied(false), 2000);
-    } else {
-      alert(`Compartilhamento simulado com canal: ${channel.toUpperCase()}`);
+      setTimeout(() => setPbCopied(false), 2500);
+      return;
     }
   };
 
@@ -372,87 +404,97 @@ export default function App() {
 
         {/* VIEW MODE: PUBLIC VIDEO STREAM GATEWAY (MOCK SMARTPHONE SITE) */}
         {viewMode === 'public_video' && (
-          <div className="max-w-md mx-auto bg-slate-900 border border-slate-850 rounded-[40px] p-6 shadow-2xl space-y-6 text-center border-l-[6px] border-l-indigo-600">
-            
+          <div className="max-w-sm mx-auto space-y-4 py-4">
             {(() => {
               const currentVideo = SpinDb.getVideoBySlug(publicSlug) || SpinDb.getVideos()[0];
               if (!currentVideo) {
                 return (
-                  <div className="text-xs font-mono text-slate-500 py-12">
-                    Não há vídeos gravados para visualizar. Realize uma gravação no Totem primeiro.
+                  <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 text-center text-xs font-mono text-slate-500">
+                    Nenhum vídeo encontrado. Realize uma gravação no Totem primeiro.
                   </div>
                 );
               }
 
               const associatedEvt = SpinDb.getEvents().find(ex => ex.id === currentVideo.eventId);
-              const matchingFrame = SpinDb.getFrames().find(fx => fx.id === currentVideo.frameAppliedId);
+              const shareUrl = `${window.location.origin}?v=${currentVideo.slug}`;
+              const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(shareUrl)}&bgcolor=0f172a&color=ffffff&margin=12`;
 
               return (
-                <div className="space-y-6">
-                  
-                  {/* Top phone header layout */}
-                  <div className="space-y-1.5">
+                <div className="space-y-4">
+
+                  {/* Header */}
+                  <div className="text-center space-y-1">
                     <span className="text-[10px] font-mono bg-emerald-950/80 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-full uppercase font-bold tracking-wider">
                       ✓ Vídeo Verificado Legal (LGPD)
                     </span>
-                    <h3 className="text-xl font-display font-extrabold text-white pt-2">
-                      Portal do Participante • Download
+                    <h3 className="text-xl font-display font-extrabold text-white pt-1">
+                      Portal do Participante
                     </h3>
-                    <p className="text-xs text-indigo-400 font-mono">Vídeo Slug Especial: {currentVideo.slug}</p>
+                    <p className="text-xs text-slate-400">{associatedEvt?.name || 'Ativação Spin 360'}</p>
                   </div>
 
-                  {/* HTML5 video wrapper */}
-                  <div className="relative aspect-[9/16] w-full max-w-[270px] mx-auto rounded-3xl overflow-hidden border-4 border-slate-950 shadow-lg bg-slate-950">
-                    <video src={currentVideo.url} controls autoPlay loop className="w-full h-full object-cover" />
+                  {/* QR Code — destaque principal */}
+                  <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 flex flex-col items-center gap-3">
+                    <p className="text-xs font-bold text-white">Aponte a câmera para baixar</p>
+                    <img
+                      src={qrUrl}
+                      alt="QR Code para download"
+                      className="w-52 h-52 rounded-2xl border-2 border-indigo-500/30"
+                    />
+                    <p className="text-[10px] text-slate-500 font-mono text-center break-all px-2">{shareUrl}</p>
                   </div>
 
-                  <div className="bg-slate-950/80 border border-slate-850 rounded-2xl p-4 text-left space-y-2">
-                    <h4 className="text-xs font-bold text-white font-mono block">MÉTRICAS DO SEU CONTEÚDO:</h4>
-                    <p className="text-[11px] text-slate-400 leading-snug">
-                      Gerado na Ativação: <strong className="text-white">{associatedEvt?.name || 'Festival Geral'}</strong>
-                    </p>
-                    <p className="text-[11px] text-slate-400 leading-snug">
-                      Trilha sonora: <strong className="text-indigo-400 font-mono">{associatedEvt?.musicId || 'Som ambiente'}</strong>
-                    </p>
-                    <div className="flex justify-between items-center border-t border-slate-900 pt-2 text-[10px] font-mono text-slate-500">
-                      <span>👁 {currentVideo.viewsCount} visualizações</span>
-                      <span>💾 {currentVideo.downloadsCount} salvos</span>
-                    </div>
+                  {/* Métricas rápidas */}
+                  <div className="bg-slate-900/60 border border-slate-800 rounded-2xl px-4 py-3 flex justify-between text-[11px] font-mono text-slate-400">
+                    <span>👁 {currentVideo.viewsCount} visualizações</span>
+                    <span>💾 {currentVideo.downloadsCount} downloads</span>
+                    <span>🔗 {currentVideo.sharesCount} shares</span>
                   </div>
 
-                  {/* Core public page buttons */}
-                  <div className="space-y-2">
-                    <button 
+                  {/* Botões de ação */}
+                  <div className="space-y-2.5">
+
+                    <button
                       onClick={() => handlePublicDownload(currentVideo)}
-                      className="w-full py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-90 rounded-xl text-xs font-bold font-mono tracking-wider text-white uppercase flex items-center justify-center gap-1 shadow-lg cursor-pointer">
-                      <Download className="w-4 h-4" /> Download Direto (MP4)
+                      className="w-full py-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-90 rounded-2xl text-sm font-bold font-mono tracking-wider text-white uppercase flex items-center justify-center gap-2 shadow-lg cursor-pointer">
+                      <Download className="w-4 h-4" /> Baixar Vídeo (MP4)
                     </button>
 
                     {pbDownloadSuccess && (
-                      <p className="text-center text-[10px] text-emerald-400 font-bold font-mono animate-bounce">
-                        ✓ Download contabilizado no banco do patrocinador.
+                      <p className="text-center text-[10px] text-emerald-400 font-bold font-mono">
+                        ✓ Download iniciado com sucesso!
                       </p>
                     )}
 
-                    <div className="grid grid-cols-2 gap-2 text-[10px] pt-1">
-                      <button 
-                        onClick={() => handlePublicShare(currentVideo, 'whatsapp')}
-                        className="py-2 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-850 text-slate-350 flex items-center justify-center gap-1 font-mono cursor-pointer">
-                        <MessageCircle className="w-3.5 h-3.5 text-emerald-500" /> WhatsApp
-                      </button>
-                      <button 
-                        onClick={() => handlePublicShare(currentVideo, 'link')}
-                        className="py-2 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-850 text-slate-350 flex items-center justify-center gap-1 font-mono cursor-pointer">
-                        {pbCopied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-indigo-400" />}
-                        {pbCopied ? 'Copiado!' : 'Copiar Link'}
-                      </button>
-                    </div>
-                  </div>
+                    <button
+                      onClick={() => handlePublicShare(currentVideo, 'whatsapp')}
+                      className="w-full py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm flex items-center justify-center gap-2 cursor-pointer transition-colors">
+                      <MessageCircle className="w-4 h-4" /> Enviar pelo WhatsApp
+                    </button>
 
+                    <button
+                      onClick={() => handlePublicShare(currentVideo, 'airdrop')}
+                      className="w-full py-3 rounded-2xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-sm flex items-center justify-center gap-2 cursor-pointer transition-colors">
+                      <Share2 className="w-4 h-4" /> AirDrop / Compartilhar
+                    </button>
+
+                    <button
+                      onClick={() => handlePublicShare(currentVideo, 'nearby')}
+                      className="w-full py-3 rounded-2xl bg-violet-600 hover:bg-violet-500 text-white font-bold text-sm flex items-center justify-center gap-2 cursor-pointer transition-colors">
+                      <Share2 className="w-4 h-4" /> Enviar por Proximidade
+                    </button>
+
+                    <button
+                      onClick={() => handlePublicShare(currentVideo, 'link')}
+                      className="w-full py-2.5 rounded-2xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs flex items-center justify-center gap-2 font-mono cursor-pointer transition-colors">
+                      {pbCopied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-indigo-400" />}
+                      {pbCopied ? 'Link copiado!' : 'Copiar link direto'}
+                    </button>
+
+                  </div>
                 </div>
               );
             })()}
-
           </div>
         )}
 

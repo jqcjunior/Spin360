@@ -18,6 +18,7 @@ import {
   VideoLead, SystemSetting, AuditLog, LogoPosition
 } from '../types';
 import { SpinDb, SEED_EFFECTS, DEMO_FRAMES_SVG } from '../db';
+import { uploadFile } from '../lib/storage';
 
 interface AdminDashboardProps {
   onSelectEventForCapture: (event: Event) => void;
@@ -94,6 +95,12 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
   const [trackVol, setTrackVol] = useState(0.8);
   const [trackStart, setTrackStart] = useState(0);
   const [trackEnd, setTrackEnd] = useState(15);
+  const [frmFile, setFrmFile] = useState<File | null>(null);
+  const [frmUploading, setFrmUploading] = useState(false);
+  const [trkFile, setTrkFile] = useState<File | null>(null);
+  const [trkUploading, setTrkUploading] = useState(false);
+  const [sponsFile, setSponsFile] = useState<File | null>(null);
+  const [sponsUploading, setSponsUploading] = useState(false);
 
   // System statistics compilation
   const totalVideos = videos.length;
@@ -282,63 +289,99 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
   };
 
   // Frame Creator save
-  const handleFrameSave = (e: React.FormEvent) => {
+  const handleFrameSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    const newFrame: Frame = {
-      id: 'frame_' + Math.floor(Math.random() * 1000000),
-      name: frmName,
-      imageUrl: frmImage, // preset key
-      category: frmCategory,
-      tags: frmTags.split(',').map(t => t.trim()),
-      isActive: true,
-      createdAt: new Date().toISOString()
-    };
-    SpinDb.saveFrame(newFrame);
-    setIsFrameModalOpen(false);
-    setFrmName('');
-    triggerReload();
+    setFrmUploading(true);
+    try {
+      let imageUrl = frmImage;
+      if (frmFile) {
+        imageUrl = await uploadFile('frames', frmFile);
+      }
+      const newFrame: Frame = {
+        id: 'frame_' + Math.floor(Math.random() * 1000000),
+        name: frmName,
+        imageUrl,
+        category: frmCategory,
+        tags: frmTags.split(',').map(t => t.trim()).filter(Boolean),
+        isActive: true,
+        createdAt: new Date().toISOString()
+      };
+      SpinDb.saveFrame(newFrame);
+      setIsFrameModalOpen(false);
+      setFrmName('');
+      setFrmFile(null);
+      triggerReload();
+    } catch (err: any) {
+      alert('Erro no upload da moldura: ' + err.message);
+    } finally {
+      setFrmUploading(false);
+    }
   };
 
   // Sponsor Creator save
-  const handleSponsorSave = (e: React.FormEvent) => {
+  const handleSponsorSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    const newSpons: Sponsor = {
-      id: 'spons_' + Math.floor(Math.random() * 1000000),
-      name: sponsName,
-      logoUrl: sponsLogo || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=120&auto=format&fit=crop&q=60',
-      siteUrl: sponsSite || undefined,
-      primaryColor: sponsColor,
-      isActive: true,
-      createdAt: new Date().toISOString()
-    };
-    SpinDb.saveSponsor(newSpons);
-    setIsSponsorModalOpen(false);
-    setSponsName('');
-    setSponsLogo('');
-    triggerReload();
+    setSponsUploading(true);
+    try {
+      let logoUrl = sponsLogo || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=120&auto=format&fit=crop&q=60';
+      if (sponsFile) {
+        logoUrl = await uploadFile('sponsors', sponsFile);
+      }
+      const newSpons: Sponsor = {
+        id: 'spons_' + Math.floor(Math.random() * 1000000),
+        name: sponsName,
+        logoUrl,
+        siteUrl: sponsSite || undefined,
+        primaryColor: sponsColor,
+        isActive: true,
+        createdAt: new Date().toISOString()
+      };
+      SpinDb.saveSponsor(newSpons);
+      setIsSponsorModalOpen(false);
+      setSponsName('');
+      setSponsLogo('');
+      setSponsFile(null);
+      triggerReload();
+    } catch (err: any) {
+      alert('Erro no upload do logo: ' + err.message);
+    } finally {
+      setSponsUploading(false);
+    }
   };
 
   // Track Creator save
-  const handleTrackSave = (e: React.FormEvent) => {
+  const handleTrackSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    const newTrack: MusicTrack = {
-      id: 'track_' + Math.floor(Math.random() * 1000000),
-      title: trackTitle,
-      artist: trackArtist,
-      audioUrl: trackUrl || 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3',
-      volume: trackVol,
-      fadeIn: 1,
-      fadeOut: 1,
-      loop: true,
-      startPoint: Number(trackStart),
-      endPoint: Number(trackEnd),
-      createdAt: new Date().toISOString()
-    };
-    SpinDb.saveMusicTrack(newTrack);
-    setIsTrackModalOpen(false);
-    setTrackTitle('');
-    setTrackArtist('');
-    triggerReload();
+    setTrkUploading(true);
+    try {
+      let audioUrl = trackUrl || 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3';
+      if (trkFile) {
+        audioUrl = await uploadFile('music', trkFile);
+      }
+      const newTrack: MusicTrack = {
+        id: 'track_' + Math.floor(Math.random() * 1000000),
+        title: trackTitle,
+        artist: trackArtist,
+        audioUrl,
+        volume: trackVol,
+        fadeIn: 1,
+        fadeOut: 1,
+        loop: true,
+        startPoint: Number(trackStart),
+        endPoint: Number(trackEnd),
+        createdAt: new Date().toISOString()
+      };
+      SpinDb.saveMusicTrack(newTrack);
+      setIsTrackModalOpen(false);
+      setTrackTitle('');
+      setTrackArtist('');
+      setTrkFile(null);
+      triggerReload();
+    } catch (err: any) {
+      alert('Erro no upload da trilha: ' + err.message);
+    } finally {
+      setTrkUploading(false);
+    }
   };
 
   const handleSystemReset = () => {
@@ -1371,9 +1414,17 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
               </select>
             </div>
 
-            <div className="space-y-1">
-              <label className="text-slate-405 block">Configuração Visual / Overlay</label>
-              <select 
+            <div className="space-y-2">
+              <label className="text-slate-405 block font-bold">Upload PNG/WebP (recomendado 1080×1920)</label>
+              <input
+                type="file"
+                accept="image/png,image/webp"
+                onChange={e => setFrmFile(e.target.files?.[0] || null)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2 text-white text-xs file:mr-2 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-indigo-600 file:text-white hover:file:bg-indigo-500 cursor-pointer"
+              />
+              {frmFile && <p className="text-emerald-400 text-[10px] font-mono">✓ {frmFile.name}</p>}
+              <label className="text-slate-500 text-[10px] block">Ou selecione um preset de demonstração:</label>
+              <select
                 value={frmImage} onChange={e => setFrmImage(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white">
                 <option value="cyberpunk">Cyberpunk Neon Pink HUD</option>
@@ -1394,7 +1445,9 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
 
             <div className="flex gap-3 pt-2">
               <button type="button" onClick={() => setIsFrameModalOpen(false)} className="flex-1 py-2 bg-slate-800 rounded-xl font-medium text-slate-300">Descartar</button>
-              <button type="submit" className="flex-1 py-2 bg-indigo-600 text-white rounded-xl font-bold">Salvar Moldura</button>
+              <button type="submit" disabled={frmUploading} className="flex-1 py-2 bg-indigo-600 text-white rounded-xl font-bold disabled:opacity-60">
+                {frmUploading ? 'Enviando...' : 'Salvar Moldura'}
+              </button>
             </div>
           </form>
         </div>
@@ -1415,9 +1468,17 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
               />
             </div>
 
-            <div className="space-y-1">
-              <label className="text-slate-405 block">URL do Logo (Recomendado PNG de Alta)</label>
-              <input 
+            <div className="space-y-2">
+              <label className="text-slate-405 block font-bold">Upload do Logo (PNG / JPG / SVG)</label>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/jpg,image/svg+xml,image/webp"
+                onChange={e => setSponsFile(e.target.files?.[0] || null)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2 text-white text-xs file:mr-2 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-indigo-600 file:text-white hover:file:bg-indigo-500 cursor-pointer"
+              />
+              {sponsFile && <p className="text-emerald-400 text-[10px] font-mono">✓ {sponsFile.name}</p>}
+              <label className="text-slate-500 text-[10px] block">Ou cole uma URL de imagem:</label>
+              <input
                 type="text" placeholder="https://..."
                 value={sponsLogo} onChange={e => setSponsLogo(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white"
@@ -1443,7 +1504,9 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
 
             <div className="flex gap-3 pt-2">
               <button type="button" onClick={() => setIsSponsorModalOpen(false)} className="flex-1 py-2 bg-slate-800 rounded-xl font-medium text-slate-300">Descartar</button>
-              <button type="submit" className="flex-1 py-2 bg-indigo-600 text-white rounded-xl font-bold">Salvar Marca</button>
+              <button type="submit" disabled={sponsUploading} className="flex-1 py-2 bg-indigo-600 text-white rounded-xl font-bold disabled:opacity-60">
+                {sponsUploading ? 'Enviando...' : 'Salvar Marca'}
+              </button>
             </div>
           </form>
         </div>
@@ -1473,9 +1536,17 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
               />
             </div>
 
-            <div className="space-y-1">
-              <label className="text-slate-450 block">Caminho / URL Stream de áudio (.mp3)</label>
-              <input 
+            <div className="space-y-2">
+              <label className="text-slate-450 block font-bold">Upload de Áudio (MP3 / WAV / M4A)</label>
+              <input
+                type="file"
+                accept="audio/mpeg,audio/mp3,audio/wav,audio/x-wav,audio/mp4,audio/m4a,audio/x-m4a"
+                onChange={e => setTrkFile(e.target.files?.[0] || null)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2 text-white text-xs file:mr-2 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-indigo-600 file:text-white hover:file:bg-indigo-500 cursor-pointer"
+              />
+              {trkFile && <p className="text-emerald-400 text-[10px] font-mono">✓ {trkFile.name}</p>}
+              <label className="text-slate-500 text-[10px] block">Ou cole uma URL de stream:</label>
+              <input
                 type="text" placeholder="https://www.soundhelix.com/..."
                 value={trackUrl} onChange={e => setTrackUrl(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white"
@@ -1501,7 +1572,9 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
 
             <div className="flex gap-3 pt-2">
               <button type="button" onClick={() => setIsTrackModalOpen(false)} className="flex-1 py-2 bg-slate-800 rounded-xl font-medium text-slate-300">Descartar</button>
-              <button type="submit" className="flex-1 py-2 bg-indigo-600 text-white rounded-xl font-bold">Salvar Trilha</button>
+              <button type="submit" disabled={trkUploading} className="flex-1 py-2 bg-indigo-600 text-white rounded-xl font-bold disabled:opacity-60">
+                {trkUploading ? 'Enviando...' : 'Salvar Trilha'}
+              </button>
             </div>
           </form>
         </div>
