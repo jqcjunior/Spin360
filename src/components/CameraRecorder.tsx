@@ -458,7 +458,7 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
           ctx.textAlign = 'center';
           ctx.shadowColor = 'rgba(0,0,0,0.5)';
           ctx.shadowBlur = 4;
-          ctx.fillText('⚡ SPIN360', 540, 1890);
+          ctx.fillText('⚡ REAL360°', 540, 1890);
           ctx.restore();
         }
       }

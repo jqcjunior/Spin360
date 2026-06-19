@@ -26,7 +26,7 @@ export const DEMO_FRAMES_SVG: Record<string, string> = {
     <path d="M 1060 1770 L 1060 1900 L 930 1900" fill="none" stroke="#6366f1" stroke-width="12" />
     <!-- Bottom HUD decoration -->
     <rect x="340" y="1840" width="400" height="40" rx="5" fill="#0f172a" stroke="#22d3ee" stroke-width="3"/>
-    <text x="540" y="1866" fill="#22d3ee" font-family="monospace" font-size="22" font-weight="bold" text-anchor="middle" letter-spacing="4">SPIN 360 SYSTEM</text>
+    <text x="540" y="1866" fill="#22d3ee" font-family="monospace" font-size="22" font-weight="bold" text-anchor="middle" letter-spacing="4">REAL 360° SYSTEM</text>
     <!-- Top HUD -->
     <rect x="390" y="40" width="300" height="35" rx="5" fill="#0f172a" stroke="#f43f5e" stroke-width="2"/>
     <text x="540" y="64" fill="#f43f5e" font-family="monospace" font-size="16" text-anchor="middle" letter-spacing="2">REC MODE: 360FPS</text>
@@ -86,7 +86,7 @@ export const DEMO_FRAMES_SVG: Record<string, string> = {
     </g>
     <!-- Festivities Text banner at bottom -->
     <rect x="180" y="1810" width="720" height="60" rx="30" fill="#f59e0b" stroke="#78350f" stroke-width="4"/>
-    <text x="540" y="1850" fill="#78350f" font-family="sans-serif" font-weight="900" font-size="28" text-anchor="middle">★ ARRAIÁ SPIN 360 ★</text>
+    <text x="540" y="1850" fill="#78350f" font-family="sans-serif" font-weight="900" font-size="28" text-anchor="middle">★ ARRAIÁ REAL 360° ★</text>
   </svg>`,
 
   wedding: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920" width="100%" height="100%">
@@ -127,7 +127,7 @@ export const DEMO_FRAMES_SVG: Record<string, string> = {
     <circle cx="90" cy="75" r="10" fill="#eab308" />
     <circle cx="120" cy="75" r="10" fill="#22c55e" />
     
-    <text x="200" y="82" fill="#94a3b8" font-family="'Space Grotesk', system-ui, sans-serif" font-weight="600" font-size="20">SPIN 360 PRO PANEL</text>
+    <text x="200" y="82" fill="#94a3b8" font-family="'Space Grotesk', system-ui, sans-serif" font-weight="600" font-size="20">REAL 360° PRO PANEL</text>
     <text x="1020" y="82" fill="#22c55e" font-family="monospace" font-size="20" font-weight="bold" text-anchor="end">● SYS ACTIVE</text>
     
     <!-- Diagonal Corner Accent strips -->
@@ -341,7 +341,7 @@ export const SEED_EVENTS: Event[] = [
       instagram: true,
       company: false
     },
-    lgpdConsentText: 'Declaro que dou consentimento para captação dos meus dados e gravação do meu vídeo de imagem para fins de divulgação e envio por WhatsApp pela equipe da Spin 360 e patrocinadores autorizados.',
+    lgpdConsentText: 'Declaro que dou consentimento para captação dos meus dados e gravação do meu vídeo de imagem para fins de divulgação e envio por WhatsApp pela equipe da Real 360° e patrocinadores autorizados.',
     createdAt: new Date('2026-06-12T14:00:00Z').toISOString(),
     updatedAt: new Date('2026-06-12T14:30:00Z').toISOString()
   },
@@ -380,7 +380,7 @@ export const SEED_EVENTS: Event[] = [
   {
     id: 'evt_wedding_at',
     name: 'Casamento Amanda & Thiago',
-    description: 'Registre sua mensagem especial para os noivos no nosso totem Spin 360!',
+    description: 'Registre sua mensagem especial para os noivos no nosso totem Real 360°!',
     date: '2026-06-20',
     time: '17:00',
     coverUrl: 'https://images.unsplash.com/photo-1511285560929-80b456fea0bc?w=600&auto=format&fit=crop&q=60',
@@ -435,7 +435,7 @@ export const SEED_EVENTS: Event[] = [
       instagram: false,
       company: true
     },
-    lgpdConsentText: 'Concordo com os Termos de Uso e Política de Privacidade da Spin 360 para download do conteúdo gravado e compartilhamento empresarial com a equipe do ArtTech Studio.',
+    lgpdConsentText: 'Concordo com os Termos de Uso e Política de Privacidade da Real 360° para download do conteúdo gravado e compartilhamento empresarial com a equipe do ArtTech Studio.',
     createdAt: new Date('2026-06-15T11:00:00Z').toISOString(),
     updatedAt: new Date('2026-06-15T11:00:00Z').toISOString()
   }
@@ -529,7 +529,7 @@ export const SEED_LEADS: VideoLead[] = [
 ];
 
 export const SEED_SETTINGS: SystemSetting[] = [
-  { key: 'system_pwa_name', value: 'Spin 360', description: 'Nome visível do PWA', updatedAt: new Date().toISOString() },
+  { key: 'system_pwa_name', value: 'Real 360°', description: 'Nome visível do PWA', updatedAt: new Date().toISOString() },
   { key: 'retention_days', value: '30', description: 'Dias para retenção de vídeos gerados antes de expirar do storage', updatedAt: new Date().toISOString() },
   { key: 'default_theme_color', value: '#6366f1', description: 'Cor principal padrão para eventos', updatedAt: new Date().toISOString() },
   { key: 'pwa_version', value: '1.0.0', description: 'Versão do Software', updatedAt: new Date().toISOString() },

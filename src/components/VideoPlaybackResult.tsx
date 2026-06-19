@@ -167,7 +167,7 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Vid
 
           {/* Bottom layout labels inside screen frame */}
           <div className="z-10 bg-gradient-to-t from-slate-950/90 to-transparent p-4 pt-12 text-white">
-            <div className="text-[10px] text-amber-500 font-mono tracking-wider mb-0.5">SPIN 360 COMPLETED</div>
+            <div className="text-[10px] text-amber-500 font-mono tracking-wider mb-0.5">REAL 360° COMPLETED</div>
             <p className="font-display font-medium text-xs leading-tight line-clamp-1">{event.name}</p>
           </div>
         </div>

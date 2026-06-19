@@ -206,7 +206,7 @@ export default function LeadCaptureModal({ event, onLeadCaptured, onCancel }: Le
               <ShieldCheck className="w-4 h-4 text-emerald-400" /> Declaração de Consentimento Lgpd
             </h4>
             <p className="text-[10px] text-slate-400 leading-relaxed max-h-24 overflow-y-auto pr-1">
-              {event.lgpdConsentText || 'Autorizo que a plataforma Spin 360 processe meus dados cadastrais e o conteúdo de vídeo capturado neste dispositivo, em conformidade com as diretrizes da LGPD (Lei Geral de Proteção de Dados), unicamente para a entrega do download e divulgação do evento patrocinado.'}
+              {event.lgpdConsentText || 'Autorizo que a plataforma Real 360° processe meus dados cadastrais e o conteúdo de vídeo capturado neste dispositivo, em conformidade com as diretrizes da LGPD (Lei Geral de Proteção de Dados), unicamente para a entrega do download e divulgação do evento patrocinado.'}
             </p>
             <label className="flex items-start gap-2.5 pt-1.5 cursor-pointer group">
               <input 

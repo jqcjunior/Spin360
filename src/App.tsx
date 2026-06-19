@@ -17,10 +17,13 @@ import LeadCaptureModal from './components/LeadCaptureModal';
 import CameraRecorder from './components/CameraRecorder';
 import VideoPlaybackResult from './components/VideoPlaybackResult';
 import useSupabaseSync from './useSupabaseSync';
+import useCatalogSync from './useCatalogSync';
+import packageInfo from '../package.json';
 
 export default function App() {
-  // ATIVA O SINCRONIZADOR SILENCIOSO
+  // ATIVA OS SINCRONIZADORES SILENCIOSOS
   useSupabaseSync();
+  useCatalogSync();
 
   // Global View Mode switcher: 'totem' (attendee flow) | 'admin' (control panel) | 'public_video' (phone preview slug)
   const [viewMode, setViewMode] = useState<'totem' | 'admin' | 'public_video'>('totem');
@@ -146,8 +149,8 @@ export default function App() {
   const handlePublicShare = async (vid: VideoRecord, channel: string) => {
     SpinDb.registerShare(vid.id, channel as any);
     const shareUrl = `${window.location.origin}?v=${vid.slug}`;
-    const shareTitle = 'Meu vídeo no Spin 360!';
-    const shareText = `Assista e baixe meu vídeo gravado na ativação Spin 360: ${shareUrl}`;
+    const shareTitle = 'Meu vídeo no Real 360°!';
+    const shareText = `Assista e baixe meu vídeo gravado na ativação Real 360°: ${shareUrl}`;
 
     if (channel === 'whatsapp') {
       try {
@@ -162,7 +165,7 @@ export default function App() {
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
           await navigator.share({
             title: shareTitle,
-            text: 'Dá uma olhada no meu vídeo gravado na ativação Spin 360!',
+            text: 'Dá uma olhada no meu vídeo gravado na ativação Real 360°!',
             files: [file]
           });
           return;
@@ -187,7 +190,7 @@ export default function App() {
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
           await navigator.share({
             title: shareTitle,
-            text: 'Confira meu vídeo gravado no Spin 360!',
+            text: 'Confira meu vídeo gravado no Real 360°!',
             files: [file]
           });
           return;
@@ -235,17 +238,20 @@ export default function App() {
       <header className="bg-slate-900 border-b border-slate-800 px-4 py-3 sticky top-0 z-50 shadow-md">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-3">
           
-          {/* Logo Brand */}
+          {/* Logo Brand: Real 360° Oficial */}
           <div className="flex items-center gap-2.5 cursor-pointer" onClick={handleResetTotemFlow}>
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-500 via-purple-600 to-pink-500 flex items-center justify-center shadow-lg shadow-indigo-950/45 border border-indigo-400/20">
-              <Camera className="w-5.5 h-5.5 text-white animate-pulse" />
-            </div>
+            {/* Imagem da Logo Nova - Estilo App Icon */}
+            <img 
+              src="/Logo.nova.png" 
+              alt="Real 360° Logo" 
+              className="w-11 h-11 rounded-2xl object-cover shadow-lg shadow-amber-900/20 border border-slate-700/50" 
+            />
             <div>
               <div className="flex items-center gap-1.5">
-                <h1 className="text-lg font-display font-black text-white tracking-tight">SPIN 360</h1>
-                <span className="text-[9px] bg-indigo-900/40 text-indigo-400 px-1.5 py-0.5 rounded border border-indigo-700/30 uppercase font-bold tracking-wider font-mono">PWA</span>
+                <h1 className="text-lg font-display font-black text-white tracking-tight">REAL 360°</h1>
+                <span className="text-[9px] bg-amber-900/40 text-amber-400 px-1.5 py-0.5 rounded border border-amber-700/30 uppercase font-bold tracking-wider font-mono">PWA</span>
               </div>
-              <p className="text-[10px] text-slate-400 font-mono">ArtTech Promotional Engine v1.0</p>
+              <p className="text-[10px] text-slate-400 font-mono">Real Promotion Engine V.{packageInfo.version}</p>
             </div>
           </div>
 
@@ -305,7 +311,7 @@ export default function App() {
                 {/* Greetings Banner */}
                 <div className="text-center space-y-3 py-4 max-w-xl mx-auto">
                   <div className="inline-flex items-center gap-1.5 bg-indigo-500/10 text-indigo-400 px-3 py-1 rounded-full text-[10px] font-bold font-mono tracking-widest uppercase border border-indigo-500/20">
-                    <Star className="w-3.5 h-3.5 fill-current" /> Ativação de Marca Spin 360
+                    <Star className="w-3.5 h-3.5 fill-current" /> Ativação de Marca Real 360°
                   </div>
                   <h2 className="text-3xl font-display font-extrabold text-white tracking-tight sm:text-4xl">
                     Selecione o seu Evento
@@ -493,7 +499,7 @@ export default function App() {
                     <h3 className="text-xl font-display font-extrabold text-white pt-1">
                       Portal do Participante
                     </h3>
-                    <p className="text-xs text-slate-400">{associatedEvt?.name || 'Ativação Spin 360'}</p>
+                    <p className="text-xs text-slate-400">{associatedEvt?.name || 'Ativação Real 360°'}</p>
                   </div>
 
                   {/* QR Code — destaque principal */}
@@ -567,7 +573,7 @@ export default function App() {
       <footer className="bg-slate-950 border-t border-slate-900 py-6 px-4">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4 text-xs text-slate-500 font-mono">
           <div>
-            <p>© 2026 Spin 360 Inc. Todos os direitos reservados.</p>
+            <p>© 2026 Real 360° Inc. Todos os direitos reservados.</p>
             <p className="text-[10px] text-slate-600">Desenvolvido em parceria com a agência de ativações ArtTech.</p>
           </div>
           <div className="flex gap-4 items-center">
