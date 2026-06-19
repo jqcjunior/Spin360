@@ -106,19 +106,36 @@ export default function App() {
   };
 
   // Direct download track for public slug page
-  const handlePublicDownload = (vid: VideoRecord) => {
+  const handlePublicDownload = async (vid: VideoRecord) => {
     SpinDb.registerDownload(vid.id);
     setPbDownloadSuccess(true);
-    
-    const link = document.createElement('a');
-    link.href = vid.url;
-    link.target = '_blank';
-    link.download = `Spin360_Clip_${vid.slug}.mp4`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
     setTimeout(() => setPbDownloadSuccess(false), 3000);
+
+    try {
+      // Puxa o arquivo físico em formato Blob para forçar o download local
+      const response = await fetch(vid.url);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = `Spin360_Clip_${vid.slug}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      // Limpa a memória
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    } catch (error) {
+      // Fallback caso seja link externo bloqueado (como o da Mixkit)
+      const link = document.createElement('a');
+      link.href = vid.url;
+      link.target = '_blank';
+      link.download = `Spin360_Clip_${vid.slug}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
   };
 
   // Direct share track for public slug page
@@ -156,6 +173,26 @@ export default function App() {
     }
 
     if (channel === 'airdrop' || channel === 'nearby') {
+      try {
+        // Transforma o vídeo em arquivo nativo MP4
+        const response = await fetch(vid.url);
+        const blob = await response.blob();
+        const file = new File([blob], `Spin360_${vid.slug}.mp4`, { type: 'video/mp4' });
+
+        // Abre a gaveta do iOS/Android já com o arquivo carregado
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            title: shareTitle,
+            text: 'Confira meu vídeo gravado no Spin 360!',
+            files: [file]
+          });
+          return;
+        }
+      } catch (err) {
+        console.warn('Falha ao extrair arquivo físico para AirDrop:', err);
+      }
+
+      // Fallback de segurança enviando apenas o link
       if (navigator.share) {
         try {
           await navigator.share({ title: shareTitle, text: shareText, url: shareUrl });

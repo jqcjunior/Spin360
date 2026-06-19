@@ -31,23 +31,38 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Vid
   const publicVideoUrl = `${window.location.origin}/video/${video.slug}`;
 
   // Direct Mock Download Action (saves to downloads count and triggers client-side saving)
-  const handleDownload = () => {
+  const handleDownload = async () => {
     SpinDb.registerDownload(video.id);
     setDownloadSuccess(true);
-    
-    // Simulate downloading by opening video source path in new tab or triggering browser click.
-    // In our iframe, direct URL opens, but safely let's trigger single click:
-    const link = document.createElement('a');
-    link.href = video.url;
-    link.target = '_blank';
-    link.download = `Spin360_Video_${video.slug}.mp4`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
     setTimeout(() => {
       setDownloadSuccess(false);
     }, 4000);
+
+    try {
+      // Puxa o arquivo físico em formato Blob para forçar o download local
+      const response = await fetch(video.url);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = `Spin360_Video_${video.slug}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      // Limpa a memória
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    } catch (error) {
+      // Fallback caso seja link externo bloqueado
+      const link = document.createElement('a');
+      link.href = video.url;
+      link.target = '_blank';
+      link.download = `Spin360_Video_${video.slug}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
   };
 
   const handleShare = (channel: 'whatsapp' | 'instagram' | 'facebook' | 'tiktok' | 'airdrop' | 'link' | 'qrcode' | 'other') => {
