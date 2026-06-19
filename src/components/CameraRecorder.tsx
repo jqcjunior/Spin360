@@ -220,7 +220,7 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
       console.log('[STEP 1] Iniciando renderização - Setup câmera hardware');
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: { ideal: 1080 }, height: { ideal: 1920 } },
-        audio: true,
+        audio: false,
       });
       streamRef.current = stream;
       if (videoRef.current) {
@@ -383,15 +383,6 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
         createdAt: new Date().toISOString(),
       };
 
-      const friendlyDate = new Date().toISOString().slice(0, 10);
-      const cleanName = event.name.replace(/[^a-zA-Z0-9]/g, '_');
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `Spin360_${cleanName}_${friendlyDate}.mp4`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-
       SpinDb.saveVideo(video);
       stopStream();
       setTimeout(() => onRecordingComplete(video), 300);
@@ -451,29 +442,16 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
       }
     }
 
-    // Custom Mix Audio System (Camera Microphone + Music Background) using AudioContext
+    // Custom Mix Audio System (Music Background Only) using AudioContext
     console.log('[STEP 5] Iniciando AudioContext e conexões');
-    let audioContextFailed = false;
-    try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      const audioCtx = new AudioCtx();
-      activeAudioContextRef.current = audioCtx;
-      const dest = audioCtx.createMediaStreamDestination();
+    const musicTrack = SpinDb.getMusicTracks().find(t => t.id === event.musicId);
+    if (musicTrack) {
+      try {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        const audioCtx = new AudioCtx();
+        activeAudioContextRef.current = audioCtx;
+        const dest = audioCtx.createMediaStreamDestination();
 
-      // Hook 1: Connect microphone stream
-      if (streamRef.current.getAudioTracks().length > 0) {
-        try {
-          const micSource = audioCtx.createMediaStreamSource(streamRef.current);
-          micSource.connect(dest);
-        } catch (eMic) {
-          console.warn('Erro ao ligar microfone ao AudioContext:', eMic);
-        }
-      }
-
-      // Hook 2: Connect background music track if configured
-      console.log('[STEP 4] Carregando música');
-      const musicTrack = SpinDb.getMusicTracks().find(t => t.id === event.musicId);
-      if (musicTrack) {
         try {
           const audio = new Audio(musicTrack.audioUrl);
           audio.crossOrigin = 'anonymous';
@@ -500,27 +478,16 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
         } catch (errMusicNode) {
           console.error('[MUSIC] Música falhou', errMusicNode);
         }
-      } else {
-        console.log('[MUSIC] Música ignorada');
-      }
 
-      // Add combined mixed track to output recorder
-      const mixedAudioTracks = dest.stream.getAudioTracks();
-      if (mixedAudioTracks.length > 0) {
-        mixedStream.addTrack(mixedAudioTracks[0]);
-      } else {
-        audioContextFailed = true;
+        const mixedAudioTracks = dest.stream.getAudioTracks();
+        if (mixedAudioTracks.length > 0) {
+          mixedStream.addTrack(mixedAudioTracks[0]);
+        }
+      } catch (errAudioCtx) {
+        console.warn('Falha ao instanciar pipeline de AudioContext:', errAudioCtx);
       }
-    } catch (errAudioCtx) {
-      console.warn('Falha ao instanciar pipeline de AudioContext:', errAudioCtx);
-      audioContextFailed = true;
-    }
-
-    if (audioContextFailed) {
-      console.log('[STEP 5] Fallback: Adicionando áudio do microfone padrão');
-      if (streamRef.current.getAudioTracks().length > 0) {
-        mixedStream.addTrack(streamRef.current.getAudioTracks()[0]);
-      }
+    } else {
+      console.log('[MUSIC] Música ignorada');
     }
 
     // Set up standard encoder
@@ -620,20 +587,6 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
             createdAt: new Date().toISOString(),
           };
 
-          // Auto trigger physical local download
-          try {
-            const friendlyDate = new Date().toISOString().slice(0, 10);
-            const cleanName = event.name.replace(/[^a-zA-Z0-9]/g, '_');
-            const a = document.createElement('a');
-            a.href = videoUrl;
-            a.download = `Spin360_${cleanName}_${friendlyDate}.mp4`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-          } catch (errDL) {
-            console.error('[STEP 10] Erro ao disparar download no browser:', errDL);
-          }
-
           SpinDb.saveVideo(compiledVideo);
           stopStream();
           setTimeout(() => onRecordingComplete(compiledVideo), 300);
@@ -716,8 +669,14 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
           autoPlay
           playsInline
           muted
-          className="hidden"
-          style={{ transform: 'scaleX(-1)' }}
+          style={{
+            position: 'absolute',
+            width: '1px',
+            height: '1px',
+            left: '-9999px',
+            opacity: 0,
+            pointerEvents: 'none'
+          }}
         />
 
         {/* Live composited canvas view with zero-delay display overlay matching outputs 100% */}
