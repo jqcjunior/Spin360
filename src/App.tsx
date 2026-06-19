@@ -50,75 +50,82 @@ export default function App() {
   useEffect(() => {
     const loadFromSupabase = async () => {
       try {
-        const { data: eventsData } = await supabase
+        // Busca todos eventos ativos
+        const { data: eventsData, error } = await supabase
           .from('events')
-          .select(`
-            id, name, description, status, category,
-            video_duration_seconds, theme_color,
-            totem_mode_enabled, lead_capture_config,
-            created_at, updated_at,
-            frame:frame_id (id, name, image_url, tags),
-            music:music_id (id, name, file_url, volume, fade_in_seconds, fade_out_seconds, is_loop, start_point_seconds)
-          `)
-          .eq('status', 'active');
+          .select('*')
+          .eq('status', 'active')
+          .order('created_at', { ascending: false });
 
-        if (eventsData && eventsData.length > 0) {
-          const mapped: Event[] = eventsData.map((e: any) => ({
+        if (error) throw error;
+        if (!eventsData || eventsData.length === 0) return;
+
+        // Busca frames e músicas separadamente
+        const { data: framesData } = await supabase
+          .from('frames')
+          .select('*')
+          .eq('is_active', true);
+
+        const { data: tracksData } = await supabase
+          .from('music_tracks')
+          .select('*')
+          .eq('is_active', true);
+
+        // Mapeia eventos para o formato do app
+        const mapped: Event[] = eventsData.map((e: any) => {
+          const frame = framesData?.find((f: any) => f.id === e.frame_id);
+          const track = tracksData?.find((t: any) => t.id === e.music_id);
+
+          // Sincroniza frame no SpinDb local
+          if (frame) {
+            SpinDb.saveFrame({
+              id: frame.id, name: frame.name, imageUrl: frame.image_url,
+              category: 'Geral', tags: frame.tags || [], isActive: true,
+              createdAt: frame.created_at || new Date().toISOString(),
+            });
+          }
+
+          // Sincroniza música no SpinDb local
+          if (track) {
+            SpinDb.saveMusicTrack({
+              id: track.id, title: track.name, artist: '',
+              audioUrl: track.file_url, volume: track.volume || 0.8,
+              fadeIn: track.fade_in_seconds || 1, fadeOut: track.fade_out_seconds || 1,
+              loop: track.is_loop || true, startPoint: track.start_point_seconds || 0,
+              endPoint: 30, createdAt: track.created_at || new Date().toISOString(),
+            });
+          }
+
+          return {
             id: e.id,
             name: e.name,
             description: e.description || '',
-            date: '',
-            time: '',
-            coverUrl: undefined,
+            date: e.event_date || '',
+            time: e.event_time || '',
+            coverUrl: e.cover_image_url || undefined,
             status: e.status,
             category: e.category || 'Geral',
-            frameId: e.frame?.id || '',
-            musicId: e.music?.id,
+            frameId: e.frame_id || '',
+            musicId: e.music_id || undefined,
             sponsorIds: [],
             sponsorsConfig: {},
             videoDuration: e.video_duration_seconds || 10,
             effectPresetId: 'eff_01',
             themeColor: e.theme_color || '#6366f1',
-            enableTotemMode: e.totem_mode_enabled || false,
+            enableTotemMode: e.totem_mode_enabled !== false,
             enableLeadCapture: e.lead_capture_config?.enabled || false,
-            requiredLeadFields: { name: true, phone: true, city: false, email: false, instagram: false, company: false },
-            lgpdConsentText: 'Autorizo a captação dos meus dados.',
+            requiredLeadFields: e.lead_capture_config?.fields || {
+              name: true, phone: true, city: false, email: false, instagram: false, company: false
+            },
+            lgpdConsentText: e.lead_capture_config?.lgpd_text || 'Autorizo a captação dos meus dados.',
             createdAt: e.created_at,
             updatedAt: e.updated_at,
-          }));
+          };
+        });
 
-          setSupabaseEvents(mapped);
+        setSupabaseEvents(mapped);
+        console.log(`[Supabase] ${mapped.length} eventos carregados:`, mapped.map(e => e.name));
 
-          // Sincroniza frames do Supabase no SpinDb local
-          eventsData.forEach((e: any) => {
-            if (e.frame) {
-              SpinDb.saveFrame({
-                id: e.frame.id,
-                name: e.frame.name,
-                imageUrl: e.frame.image_url,
-                category: 'Geral',
-                tags: e.frame.tags || [],
-                isActive: true,
-                createdAt: new Date().toISOString(),
-              });
-            }
-            if (e.music) {
-              SpinDb.saveMusicTrack({
-                id: e.music.id,
-                title: e.music.name,
-                artist: '',
-                audioUrl: e.music.file_url,
-                volume: e.music.volume || 0.8,
-                fadeIn: e.music.fade_in_seconds || 1,
-                fadeOut: e.music.fade_out_seconds || 1,
-                loop: e.music.is_loop || true,
-                startPoint: e.music.start_point_seconds || 0,
-                endPoint: 30,
-                createdAt: new Date().toISOString(),
-              });
-            }
-          });
-        }
       } catch (err) {
         console.error('[Supabase] Erro ao carregar eventos:', err);
       } finally {
@@ -393,10 +400,3 @@ export default function App() {
           </div>
           <div className="flex gap-4 items-center">
             <span className="flex items-center gap-1"><ShieldCheck className="w-4 h-4 text-emerald-500" /> RLS Ativo</span>
-            <span className="text-indigo-400">PWA Instalável</span>
-          </div>
-        </div>
-      </footer>
-    </div>
-  );
-}
