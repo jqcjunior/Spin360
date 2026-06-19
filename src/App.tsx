@@ -17,10 +17,13 @@ import LeadCaptureModal from './components/LeadCaptureModal';
 import CameraRecorder from './components/CameraRecorder';
 import VideoPlaybackResult from './components/VideoPlaybackResult';
 import useSupabaseSync from './hooks/useSupabaseSync';
+import { supabase } from './lib/supabase';
 
 export default function App() {
   const [viewMode, setViewMode] = useState<'totem' | 'admin' | 'public_video'>('totem');
   const [dbTick, setDbTick] = useState(0);
+  const [supabaseEvents, setSupabaseEvents] = useState<Event[]>([]);
+  const [loadingEvents, setLoadingEvents] = useState(true);
   useSupabaseSync();
 
   const [totemState, setTotemState] = useState<'selection' | 'lead' | 'recorder' | 'result'>('selection');
@@ -44,8 +47,92 @@ export default function App() {
     }
   }, []);
 
+  useEffect(() => {
+    const loadFromSupabase = async () => {
+      try {
+        const { data: eventsData } = await supabase
+          .from('events')
+          .select(`
+            id, name, description, status, category,
+            video_duration_seconds, theme_color,
+            totem_mode_enabled, lead_capture_config,
+            created_at, updated_at,
+            frame:frame_id (id, name, image_url, tags),
+            music:music_id (id, name, file_url, volume, fade_in_seconds, fade_out_seconds, is_loop, start_point_seconds)
+          `)
+          .eq('status', 'active');
+
+        if (eventsData && eventsData.length > 0) {
+          const mapped: Event[] = eventsData.map((e: any) => ({
+            id: e.id,
+            name: e.name,
+            description: e.description || '',
+            date: '',
+            time: '',
+            coverUrl: undefined,
+            status: e.status,
+            category: e.category || 'Geral',
+            frameId: e.frame?.id || '',
+            musicId: e.music?.id,
+            sponsorIds: [],
+            sponsorsConfig: {},
+            videoDuration: e.video_duration_seconds || 10,
+            effectPresetId: 'eff_01',
+            themeColor: e.theme_color || '#6366f1',
+            enableTotemMode: e.totem_mode_enabled || false,
+            enableLeadCapture: e.lead_capture_config?.enabled || false,
+            requiredLeadFields: { name: true, phone: true, city: false, email: false, instagram: false, company: false },
+            lgpdConsentText: 'Autorizo a captação dos meus dados.',
+            createdAt: e.created_at,
+            updatedAt: e.updated_at,
+          }));
+
+          setSupabaseEvents(mapped);
+
+          // Sincroniza frames do Supabase no SpinDb local
+          eventsData.forEach((e: any) => {
+            if (e.frame) {
+              SpinDb.saveFrame({
+                id: e.frame.id,
+                name: e.frame.name,
+                imageUrl: e.frame.image_url,
+                category: 'Geral',
+                tags: e.frame.tags || [],
+                isActive: true,
+                createdAt: new Date().toISOString(),
+              });
+            }
+            if (e.music) {
+              SpinDb.saveMusicTrack({
+                id: e.music.id,
+                title: e.music.name,
+                artist: '',
+                audioUrl: e.music.file_url,
+                volume: e.music.volume || 0.8,
+                fadeIn: e.music.fade_in_seconds || 1,
+                fadeOut: e.music.fade_out_seconds || 1,
+                loop: e.music.is_loop || true,
+                startPoint: e.music.start_point_seconds || 0,
+                endPoint: 30,
+                createdAt: new Date().toISOString(),
+              });
+            }
+          });
+        }
+      } catch (err) {
+        console.error('[Supabase] Erro ao carregar eventos:', err);
+      } finally {
+        setLoadingEvents(false);
+      }
+    };
+
+    loadFromSupabase();
+  }, []);
+
   const triggerDbReload = () => setDbTick(prev => prev + 1);
-  const activeEvents = SpinDb.getEvents().filter(e => e.status === 'active');
+  const activeEvents = supabaseEvents.length > 0
+    ? supabaseEvents
+    : SpinDb.getEvents().filter(e => e.status === 'active');
   const allCompletedVideos = SpinDb.getVideos();
 
   const handleSelectEvent = (event: Event) => {
@@ -186,6 +273,12 @@ export default function App() {
                       </div>
                     </div>
                   ))}
+                  {loadingEvents && (
+                    <div className="col-span-full text-center py-12">
+                      <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                      <p className="text-slate-500 text-xs font-mono">Carregando eventos...</p>
+                    </div>
+                  )}
                   {activeEvents.length === 0 && (
                     <div className="col-span-full bg-slate-900 border border-slate-800 p-8 rounded-3xl text-center space-y-3">
                       <p className="text-slate-400 text-xs font-mono">Nenhum evento com status "Ativo" no momento.</p>
