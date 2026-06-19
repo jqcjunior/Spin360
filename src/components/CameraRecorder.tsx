@@ -43,6 +43,23 @@ export async function saveVideoBlobsToIndexedDB(id: string, videoBlob: Blob, thu
   }
 }
 
+export async function verifyVideoInIndexedDB(id: string): Promise<boolean> {
+  try {
+    const db = await openDB();
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    const request = store.get(id);
+    const record = await new Promise<any>((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    return !!(record && record.videoBlob && record.videoBlob.size > 0);
+  } catch (err) {
+    console.error('[IndexedDB] erro ao verificar persistência:', err);
+    return false;
+  }
+}
+
 export async function restoreVideoUrls(): Promise<void> {
   try {
     const db = await openDB();
@@ -143,6 +160,74 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
   const [countdown, setCountdown] = useState(3);
   const [timeLeft, setTimeLeft] = useState(event.videoDuration);
   const [error, setError] = useState<string | null>(null);
+  const [processingStep, setProcessingStep] = useState<string | null>(null);
+
+  // Real-time diagnostics telemetry for live iOS Safari and general web auditing
+  const [telemetry, setTelemetry] = useState({
+    camWidth: 0,
+    camHeight: 0,
+    canvasTracks: 0,
+    audioStatus: 'Inativo',
+    videoTracksCount: 0,
+    audioTracksCount: 0,
+    recorderStatus: 'Inativo',
+    criticalError: null as string | null
+  });
+
+  // Automatically probe media tracks & metrics at safe 500ms intervals to update HUD live
+  useEffect(() => {
+    const intv = setInterval(() => {
+      const v = videoRef.current;
+      const c = canvasRef.current;
+      const r = mediaRecorderRef.current;
+
+      const currentWidth = v ? v.videoWidth : 0;
+      const currentHeight = v ? v.videoHeight : 0;
+
+      let currentCanvasTracks = 0;
+      if (c) {
+        try {
+          const stream = (c as any).captureStream ? (c as any).captureStream(30) : ((c as any).webkitCaptureStream ? (c as any).webkitCaptureStream(30) : null);
+          if (stream) {
+            currentCanvasTracks = stream.getVideoTracks().length;
+          }
+        } catch (_) {}
+      }
+
+      let rStatus = 'Inativo';
+      let vCount = 0;
+      let aCount = 0;
+      if (r) {
+        rStatus = r.state;
+        if (r.stream) {
+          vCount = r.stream.getVideoTracks().length;
+          aCount = r.stream.getAudioTracks().length;
+        }
+      }
+
+      setTelemetry(prev => {
+        let crit = prev.criticalError;
+        if (!crit && currentWidth === 0 && (recState === 'recording' || recState === 'preview')) {
+          // If in preview or recording and camera reports 0 dimensions, flag it
+          crit = 'CAMERA SEM FRAMES';
+        } else if (crit === 'CAMERA SEM FRAMES' && currentWidth > 0) {
+          crit = null;
+        }
+        return {
+          ...prev,
+          camWidth: currentWidth,
+          camHeight: currentHeight,
+          canvasTracks: currentCanvasTracks,
+          recorderStatus: rStatus,
+          videoTracksCount: vCount,
+          audioTracksCount: aCount,
+          criticalError: crit
+        };
+      });
+    }, 500);
+
+    return () => clearInterval(intv);
+  }, [recState]);
 
   // Preloaded assets state
   const [frameImg, setFrameImg] = useState<HTMLImageElement | null>(null);
@@ -225,6 +310,20 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+
+        await new Promise<void>((resolve) => {
+          const video = videoRef.current!;
+
+          if (video.readyState >= 2) {
+            resolve();
+            return;
+          }
+
+          video.onloadedmetadata = () => {
+            resolve();
+          };
+        });
+
         await videoRef.current.play();
       }
       setRecState('preview');
@@ -254,14 +353,18 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
 
           // 1. Draw Mirror flipped live camera view
           ctx.save();
+
           ctx.translate(canvas.width, 0);
           ctx.scale(-1, 1);
-          if (video.videoWidth > 0 && video.videoHeight > 0) {
-            const scale = Math.max(canvas.width / video.videoWidth, canvas.height / video.videoHeight);
-            const dx = (canvas.width - video.videoWidth * scale) / 2;
-            const dy = (canvas.height - video.videoHeight * scale) / 2;
-            ctx.drawImage(video, -dx, dy, video.videoWidth * scale, video.videoHeight * scale);
-          }
+
+          ctx.drawImage(
+            video,
+            0,
+            0,
+            canvas.width,
+            canvas.height
+          );
+
           ctx.restore();
 
           // 2. Draw Vector/SVG Frame overlay
@@ -276,6 +379,11 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
               const maxH = 80;
               let w = img.width;
               let h = img.height;
+
+              if (!w || !h) {
+                return;
+              }
+
               const ratio = Math.min(maxW / w, maxH / h);
               w *= ratio;
               h *= ratio;
@@ -395,7 +503,20 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
 
   const startRecording = useCallback(() => {
     const canvas = canvasRef.current;
+    const video = videoRef.current;
     if (!canvas || !streamRef.current) return;
+
+    // VALIDATIVE AUDIT 1: Verify video feed is ready
+    if (
+      !video ||
+      video.readyState < 2
+    ) {
+      console.error('[AUDITORIA] Câmera não inicializada!');
+      setTelemetry(prev => ({ ...prev, criticalError: 'CAMERA SEM FRAMES' }));
+      setError('Câmera não inicializada');
+      setRecState('preview');
+      return;
+    }
 
     chunksRef.current = [];
     console.log('[STEP 6] Renderizando Canvas e configurando captura de mídia em tempo real');
@@ -421,7 +542,6 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
     // Capture standard 30 FPS video with burned overlays directly from canvas
     let mixedStream = new MediaStream();
     let canvasStream: MediaStream | null = null;
-    let usingCanvas = true;
 
     try {
       const getStream = canvas.captureStream || (canvas as any).webkitCaptureStream;
@@ -432,19 +552,34 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
       console.error('[SAFARI FALLBACK] captureStream falhou:', e);
     }
 
+    // VALIDATIVE AUDIT 2: Assert canvas tracking structure
+    const canvasTracksCount = canvasStream ? canvasStream.getVideoTracks().length : 0;
+    if (!canvasStream || canvasTracksCount === 0) {
+      console.error('[AUDITORIA] Stream do canvas falhou!');
+      setTelemetry(prev => ({ ...prev, criticalError: 'CANVAS STREAM FALHOU' }));
+      setError('Falha ao capturar vídeo');
+      setRecState('preview');
+      return;
+    }
+
     if (canvasStream && canvasStream.getVideoTracks().length > 0) {
       mixedStream.addTrack(canvasStream.getVideoTracks()[0]);
-    } else {
-      console.warn('[SAFARI FALLBACK] Sem track de vídeo de Canvas. Usando track de câmera direto');
-      usingCanvas = false;
-      if (streamRef.current.getVideoTracks().length > 0) {
-        mixedStream.addTrack(streamRef.current.getVideoTracks()[0]);
-      }
+    }
+
+    // VALIDATIVE AUDIT 3 & 4: Assert we have video track before proceeding
+    const totalVideoTracks = mixedStream.getVideoTracks().length;
+    if (totalVideoTracks === 0) {
+      console.error('[AUDITORIA] Não continuar gravação se não existir track de vídeo!');
+      setTelemetry(prev => ({ ...prev, criticalError: 'SEM TRACK DE VÍDEO' }));
+      setError('Falha ao capturar vídeo');
+      setRecState('preview');
+      return;
     }
 
     // Custom Mix Audio System (Music Background Only) using AudioContext
     console.log('[STEP 5] Iniciando AudioContext e conexões');
     const musicTrack = SpinDb.getMusicTracks().find(t => t.id === event.musicId);
+    let audioStatusVal = 'Inativo - Sem trilha';
     if (musicTrack) {
       try {
         const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -453,6 +588,7 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
         const dest = audioCtx.createMediaStreamDestination();
 
         try {
+          audioStatusVal = 'Carregando';
           const audio = new Audio(musicTrack.audioUrl);
           audio.crossOrigin = 'anonymous';
           audio.loop = musicTrack.loop;
@@ -475,25 +611,47 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
             console.warn('Erro autoplay música na gravação:', errPlay);
             console.log('[MUSIC] Música falhou');
           });
+          audio.muted = false;
+          audio.preload = 'auto';
+
+          const mixedAudioTracks = dest.stream.getAudioTracks();
+          if (mixedAudioTracks.length > 0) {
+            mixedStream.addTrack(mixedAudioTracks[0]);
+            audioStatusVal = 'Ativa (Música)';
+          } else {
+            audioStatusVal = 'Falha: sem track';
+          }
         } catch (errMusicNode) {
           console.error('[MUSIC] Música falhou', errMusicNode);
-        }
-
-        const mixedAudioTracks = dest.stream.getAudioTracks();
-        if (mixedAudioTracks.length > 0) {
-          mixedStream.addTrack(mixedAudioTracks[0]);
+          audioStatusVal = 'Falhou: ' + String(errMusicNode);
         }
       } catch (errAudioCtx) {
         console.warn('Falha ao instanciar pipeline de AudioContext:', errAudioCtx);
+        audioStatusVal = 'Sem suporte Web Audio: ' + String(errAudioCtx);
       }
     } else {
       console.log('[MUSIC] Música ignorada');
+      audioStatusVal = 'Sem música';
     }
+
+    // Output live structural track metrics to Console as explicitly requested
+    const totalAudioTracks = mixedStream.getAudioTracks().length;
+    console.log(`VIDEO TRACKS: ${totalVideoTracks}`);
+    console.log(`AUDIO TRACKS: ${totalAudioTracks}`);
+
+    // Commit state feedback to HUD
+    setTelemetry(prev => ({
+      ...prev,
+      audioStatus: audioStatusVal,
+      videoTracksCount: totalVideoTracks,
+      audioTracksCount: totalAudioTracks,
+      criticalError: null
+    }));
 
     // Set up standard encoder
     let recorder: MediaRecorder | null = null;
     const recorderOptionsList = [
-      { mimeType, videoBitsPerSecond: 4500000 },
+      { mimeType, videoBitsPerSecond: 2500000 },
       { mimeType },
       {}
     ];
@@ -510,16 +668,10 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
     }
 
     if (!recorder) {
-      console.error('[SAFARI FALLBACK] Todos os MediaRecorders falharam no stream misturado. Tentando gravação pura com a câmera');
-      try {
-        recorder = new MediaRecorder(streamRef.current);
-        usingCanvas = false;
-      } catch (errFinalMedia) {
-        console.error('Falha total e irrecuperável de gravação:', errFinalMedia);
-        setError('Ocorreu um erro no processador de vídeo do aparelho. Certifique-se de usar o Safari/Chrome atualizado.');
-        setRecState('preview');
-        return;
-      }
+      console.error('[SAFARI ERRO] Todos os MediaRecorders falharam no stream misturado.');
+      setError('Ocorreu um erro no processador de vídeo do aparelho. Certifique-se de usar o Safari/Chrome atualizado.');
+      setRecState('preview');
+      return;
     }
 
     mediaRecorderRef.current = recorder;
@@ -540,61 +692,130 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
       console.log('[STEP 8] Gerando Blob final de alta fidelidade');
       const finalMime = recorder?.mimeType || 'video/mp4';
       const blob = new Blob(chunksRef.current, { type: finalMime });
+      
       setRecState('processing');
+      setProcessingStep('[1/6] Preparando vídeo');
 
-      // Processing & saving index database takes less than 2 seconds
-      setTimeout(async () => {
-        try {
-          let thumbnailBlob = new Blob([], { type: 'image/jpeg' });
-          if (canvasRef.current) {
-            await new Promise<void>((r) => {
-              canvasRef.current!.toBlob((b) => {
-                if (b) thumbnailBlob = b;
-                r();
-              }, 'image/jpeg', 0.85);
-            });
-          }
+      // Processing safeguard 5 seconds timeout
+      let hasTimedOut = false;
+      const processingTimeout = setTimeout(() => {
+        hasTimedOut = true;
+        console.error('[AUDITORIA] Tempo limite do processamento expirou (5s)');
+        setError('Erro: Tempo limite de processamento excedido.');
+        setRecState('preview');
+      }, 5000);
 
-          const videoUrl = URL.createObjectURL(blob);
-          const thumbUrl = thumbnailBlob.size > 0 ? URL.createObjectURL(thumbnailBlob) : '';
+      const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-          const id = 'vid_' + Date.now();
-          const slug = Math.random().toString(36).slice(2, 7);
+      try {
+        // [1/6] -> [2/6]
+        await delay(500);
+        if (hasTimedOut) return;
+        setProcessingStep('[2/6] Aplicando moldura');
 
-          console.log('[STEP 9] Salvando no IndexedDB Videos Blob d\'água');
-          try {
-            await saveVideoBlobsToIndexedDB(id, blob, thumbnailBlob);
-          } catch (errIDB) {
-            console.error('[STEP 9] IDB erro:', errIDB);
-          }
+        // [2/6] -> [3/6]
+        await delay(500);
+        if (hasTimedOut) return;
+        setProcessingStep('[3/6] Aplicando patrocinadores');
 
-          console.log('[STEP 10] Concluído - Descarregando gravação');
-          const compiledVideo: VideoRecord = {
-            id,
-            slug,
-            eventId: event.id,
-            leadId: lead?.id,
-            url: videoUrl,
-            thumbnailUrl: thumbUrl,
-            duration: event.videoDuration,
-            status: 'completed',
-            effectAppliedId: event.effectPresetId,
-            frameAppliedId: event.frameId,
-            musicAppliedId: event.musicId,
-            viewsCount: 0,
-            downloadsCount: 0,
-            sharesCount: 0,
-            createdAt: new Date().toISOString(),
-          };
+        // [3/6] -> [4/6]
+        await delay(500);
+        if (hasTimedOut) return;
+        setProcessingStep('[4/6] Aplicando música');
 
-          SpinDb.saveVideo(compiledVideo);
-          stopStream();
-          setTimeout(() => onRecordingComplete(compiledVideo), 300);
-        } catch (errFinal) {
-          console.error('[STEP 10] Falha geral ao persistizar vídeo, usando fallback básico:', errFinal);
-          fallbackRawSave(blob);
+        // [4/6] -> [5/6]
+        await delay(500);
+        if (hasTimedOut) return;
+        setProcessingStep('[5/6] Salvando vídeo');
+
+        // Generate thumbnail
+        let thumbnailBlob = new Blob([], { type: 'image/jpeg' });
+        if (canvasRef.current) {
+          await new Promise<void>((r) => {
+            canvasRef.current!.toBlob((b) => {
+              if (b) thumbnailBlob = b;
+              r();
+            }, 'image/jpeg', 0.85);
+          });
         }
-      }, 500);
+
+        const videoUrl = URL.createObjectURL(blob);
+        const thumbUrl = thumbnailBlob.size > 0 ? URL.createObjectURL(thumbnailBlob) : '';
+
+        const id = 'vid_' + Date.now();
+        const slug = Math.random().toString(36).slice(2, 7);
+
+        console.log('[STEP 9] Salvando no IndexedDB Videos Blob d\'água');
+        try {
+          await saveVideoBlobsToIndexedDB(id, blob, thumbnailBlob);
+        } catch (errIDB) {
+          console.error('[STEP 9] IDB erro:', errIDB);
+          clearTimeout(processingTimeout);
+          setError('Falha ao salvar vídeo');
+          setRecState('preview');
+          return;
+        }
+
+        // VALIDATIVE AUDIT 7: Read-after-write IndexedDB validation
+        const verifiedExists = await verifyVideoInIndexedDB(id);
+        if (!verifiedExists) {
+          console.error('[AUDITORIA] Falha ao ler vídeo do IndexedDB após salvamento!');
+          clearTimeout(processingTimeout);
+          setError('Falha ao salvar vídeo');
+          setRecState('preview');
+          return;
+        }
+
+        if (hasTimedOut) return;
+        setProcessingStep('[6/6] Finalizando');
+        await delay(400);
+
+        console.log('[STEP 10] Concluído - Descarregando gravação');
+        const compiledVideo: VideoRecord = {
+          id,
+          slug,
+          eventId: event.id,
+          leadId: lead?.id,
+          url: videoUrl,
+          thumbnailUrl: thumbUrl,
+          duration: event.videoDuration,
+          status: 'completed',
+          effectAppliedId: event.effectPresetId,
+          frameAppliedId: event.frameId,
+          musicAppliedId: event.musicId,
+          viewsCount: 0,
+          downloadsCount: 0,
+          sharesCount: 0,
+          createdAt: new Date().toISOString(),
+        };
+
+        SpinDb.saveVideo(compiledVideo);
+
+        // VALIDATIVE AUDIT 8: Database verify query
+        const savedCheck = SpinDb.getVideos().find(v => v.id === id);
+        if (
+          !savedCheck || 
+          !savedCheck.id || 
+          !savedCheck.eventId || 
+          !savedCheck.url || 
+          !savedCheck.thumbnailUrl || 
+          !savedCheck.status
+        ) {
+          console.error('[AUDITORIA] Falha ao registrar vídeo no banco local!');
+          clearTimeout(processingTimeout);
+          setError('Falha ao registrar vídeo');
+          setRecState('preview');
+          return;
+        }
+
+        clearTimeout(processingTimeout);
+        stopStream();
+        setTimeout(() => onRecordingComplete(compiledVideo), 300);
+      } catch (errFinal) {
+        console.error('[STEP 10] Falha geral ao persistizar vídeo usando fallback seguro:', errFinal);
+        clearTimeout(processingTimeout);
+        fallbackRawSave(blob);
+      }
     };
 
     recorder.start(100);
@@ -687,6 +908,33 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
           className="absolute inset-0 w-full h-full object-cover bg-black"
         />
 
+        {/* Real-time Diagnostics HUD */}
+        <div 
+          id="rec-diagnostics-hud"
+          className="absolute top-20 left-4 z-50 bg-black/85 border border-slate-700/80 p-3.5 rounded-xl font-mono text-[10px] text-green-400 space-y-1.5 pointer-events-none max-w-[285px] leading-relaxed shadow-lg"
+        >
+          <div className="text-[11px] font-bold text-slate-300 border-b border-slate-700/60 pb-1 mb-1.5 flex justify-between items-center">
+            <span>💻 DIAGNÓSTICO AUDITORIA</span>
+            {telemetry.criticalError ? (
+              <span className="text-red-500 font-bold px-1.5 py-0.5 bg-red-950/40 rounded border border-red-800 animate-pulse">
+                ERR
+              </span>
+            ) : (
+              <span className="text-emerald-500 font-bold">OK</span>
+            )}
+          </div>
+          <div><span className="text-slate-400 font-semibold">[CAMERA]</span> Res: <span className="text-white">{telemetry.camWidth}x{telemetry.camHeight}</span></div>
+          <div><span className="text-slate-400 font-semibold">[CANVAS]</span> Tracks de Vídeo: <span className="text-white">{telemetry.canvasTracks}</span></div>
+          <div><span className="text-slate-400 font-semibold">[AUDIO]</span> Status: <span className="text-white">{telemetry.audioStatus}</span></div>
+          <div><span className="text-slate-400 font-semibold">[RECORDER]</span> Video Tracks: <span className="text-white">{telemetry.videoTracksCount}</span> | Audio Tracks: <span className="text-white">{telemetry.audioTracksCount}</span></div>
+          <div><span className="text-slate-400 font-semibold">STATUS CORRENTE:</span> <span className="text-indigo-400">{telemetry.recorderStatus}</span></div>
+          {telemetry.criticalError && (
+            <div className="text-red-400 font-bold border-t border-red-900/40 pt-1.5 mt-1 animate-pulse">
+              ⚠️ ERRO: {telemetry.criticalError}
+            </div>
+          )}
+        </div>
+
         {/* Request stream errors */}
         {(recState === 'requesting' || error) && (
           <div className="absolute inset-0 flex flex-col items-center justify-center z-30 bg-black/80 p-8 text-center space-y-6">
@@ -714,11 +962,36 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
 
         {/* Processing State - Instant compilation and IndexedDB save */}
         {recState === 'processing' && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center z-30 bg-black/90 space-y-4">
-            <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-            <p className="text-white font-extrabold text-xl font-display">PROCESSANDO VÍDEO...</p>
-            <p className="text-slate-400 text-xs font-mono max-w-[240px] text-center">
-              Salvando arquivo com música, moldura e logos na galeria do celular
+          <div className="absolute inset-0 flex flex-col items-center justify-center z-30 bg-black/90 space-y-4 p-8 text-center animate-fade-in">
+            <div className="relative w-20 h-20">
+              <div className="absolute inset-0 border-4 border-indigo-500/20 rounded-full" />
+              <div className="absolute inset-0 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+            <p className="text-white font-black text-2xl tracking-wider font-display">PROCESSANDO VÍDEO</p>
+            
+            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl px-6 py-4 w-full max-w-sm space-y-3 shadow-2xl">
+              <div className="font-mono text-emerald-400 text-sm font-bold flex items-center justify-center gap-2">
+                <span className="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                {processingStep || '[1/6] Preparando vídeo'}
+              </div>
+              <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                <div 
+                  className="bg-indigo-500 h-full rounded-full transition-all duration-300"
+                  style={{ 
+                    width: `${
+                      processingStep?.includes('1/6') ? 16 :
+                      processingStep?.includes('2/6') ? 33 :
+                      processingStep?.includes('3/6') ? 50 :
+                      processingStep?.includes('4/6') ? 66 :
+                      processingStep?.includes('5/6') ? 83 : 100
+                    }%` 
+                  }}
+                />
+              </div>
+            </div>
+
+            <p className="text-slate-400 text-xs font-mono max-w-[260px]">
+              Garantindo renderização de alta-fidelidade compatível com iOS &amp; Android
             </p>
           </div>
         )}
