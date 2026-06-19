@@ -12,15 +12,19 @@ const STORE_NAME = 'videos_blob';
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = (e) => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: 'id' });
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    try {
+      const request = indexedDB.open(DB_NAME, DB_VERSION);
+      request.onupgradeneeded = (e) => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(STORE_NAME)) {
+          db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 
@@ -84,25 +88,36 @@ restoreVideoUrls();
 // Helper to preload Image from URL or raw SVG markup
 const preloadOverlayImage = (urlOrSvgKey: string): Promise<HTMLImageElement> => {
   return new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous'; // preserve clean canvas
-    if (urlOrSvgKey.startsWith('http')) {
-      img.src = urlOrSvgKey;
-    } else {
-      const svgString = DEMO_FRAMES_SVG[urlOrSvgKey] || '';
-      const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
-      img.src = URL.createObjectURL(blob);
-    }
-    img.onload = () => resolve(img);
-    img.onerror = () => {
-      // Return a safe empty transparent Pixel canvas image on failure
+    try {
+      const img = new Image();
+      img.crossOrigin = 'anonymous'; // preserve clean canvas
+      if (urlOrSvgKey.startsWith('http')) {
+        img.src = urlOrSvgKey;
+      } else {
+        const svgString = DEMO_FRAMES_SVG[urlOrSvgKey] || '';
+        const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+        img.src = URL.createObjectURL(blob);
+      }
+      img.onload = () => resolve(img);
+      img.onerror = () => {
+        console.warn('Falha no carregamento de overlay:', urlOrSvgKey);
+        // Return a safe empty transparent Pixel canvas image on failure
+        const canvasFallback = document.createElement('canvas');
+        canvasFallback.width = 1;
+        canvasFallback.height = 1;
+        const fallbackImg = new Image();
+        fallbackImg.src = canvasFallback.toDataURL();
+        fallbackImg.onload = () => resolve(fallbackImg);
+      };
+    } catch (e) {
+      console.error('Erro de pre-load geral:', e);
       const canvasFallback = document.createElement('canvas');
       canvasFallback.width = 1;
       canvasFallback.height = 1;
       const fallbackImg = new Image();
       fallbackImg.src = canvasFallback.toDataURL();
       fallbackImg.onload = () => resolve(fallbackImg);
-    };
+    }
   });
 };
 
@@ -117,20 +132,63 @@ type RecorderState = 'requesting' | 'preview' | 'countdown' | 'recording' | 'pro
 
 export default function CameraRecorder({ event, lead, onRecordingComplete, onCancel }: CameraRecorderProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
 
   const [recState, setRecState] = useState<RecorderState>('requesting');
   const [countdown, setCountdown] = useState(3);
   const [timeLeft, setTimeLeft] = useState(event.videoDuration);
   const [error, setError] = useState<string | null>(null);
 
-  // Background audio preview during front countdown / recording vibe
-  const [liveAudio, setLiveAudio] = useState<HTMLAudioElement | null>(null);
+  // Preloaded assets state
+  const [frameImg, setFrameImg] = useState<HTMLImageElement | null>(null);
+  const [sponsorImages, setSponsorImages] = useState<{ img: HTMLImageElement; position: string }[]>([]);
+
+  // Ref audio setup inside recording session
+  const activeAudioRef = useRef<HTMLAudioElement | null>(null);
+  const activeAudioContextRef = useRef<AudioContext | null>(null);
 
   const frame = SpinDb.getFrames().find(f => f.id === event.frameId);
+
+  // 1. Asset preload on mount
+  useEffect(() => {
+    let active = true;
+    const preloadAssets = async () => {
+      console.log('[STEP 2] Carregando frame SVG de fundo e logos');
+      if (frame) {
+        try {
+          const loadedImg = await preloadOverlayImage(frame.imageUrl);
+          if (active) setFrameImg(loadedImg);
+        } catch (e) {
+          console.error('[STEP 2] Erro ao pre-carregar frame:', e);
+        }
+      }
+
+      console.log('[STEP 3] Carregando patrocinadores da ativação');
+      const loadedSponsors = SpinDb.getSponsors().filter(s => event.sponsorIds?.includes(s.id));
+      try {
+        const list = await Promise.all(
+          loadedSponsors.map(async (s) => {
+            const img = await preloadOverlayImage(s.logoUrl);
+            const config = event.sponsorsConfig?.[s.id] || { position: 'bottom_right', order: 1 };
+            return { img, position: config.position };
+          })
+        );
+        if (active) setSponsorImages(list);
+      } catch (e) {
+        console.error('[STEP 3] Erro ao pre-carregar patrocinadores:', e);
+      }
+    };
+
+    preloadAssets();
+    return () => {
+      active = false;
+    };
+  }, [event, frame]);
 
   const stopStream = useCallback(() => {
     if (streamRef.current) {
@@ -138,16 +196,28 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
       streamRef.current = null;
     }
     if (timerRef.current) clearInterval(timerRef.current);
-    if (liveAudio) {
-      liveAudio.pause();
-      liveAudio.src = '';
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
     }
-  }, [liveAudio]);
+    if (activeAudioRef.current) {
+      try {
+        activeAudioRef.current.pause();
+        activeAudioRef.current.src = '';
+      } catch (_) {}
+    }
+    if (activeAudioContextRef.current) {
+      try {
+        activeAudioContextRef.current.close();
+      } catch (_) {}
+    }
+  }, []);
 
   const startCamera = useCallback(async () => {
     setError(null);
     setRecState('requesting');
     try {
+      console.log('[STEP 1] Iniciando renderização - Setup câmera hardware');
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: { ideal: 1080 }, height: { ideal: 1920 } },
         audio: true,
@@ -169,52 +239,409 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
     return () => stopStream();
   }, [startCamera, stopStream]);
 
-  // Pre-instantiate Live Background music for high-energy recording vibe
+  // Real-time canvas draw loop - burns frame overlay, logos and watermark directly on canvas stream
   useEffect(() => {
-    const track = SpinDb.getMusicTracks().find(t => t.id === event.musicId);
-    if (track) {
-      const audio = new Audio(track.audioUrl);
-      audio.crossOrigin = 'anonymous';
-      audio.loop = track.loop;
-      audio.volume = track.volume || 0.8;
-      setLiveAudio(audio);
+    let active = true;
+    const drawLoop = () => {
+      if (!active) return;
+
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      if (video && canvas && recState !== 'requesting') {
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+          // 1. Draw Mirror flipped live camera view
+          ctx.save();
+          ctx.translate(canvas.width, 0);
+          ctx.scale(-1, 1);
+          if (video.videoWidth > 0 && video.videoHeight > 0) {
+            const scale = Math.max(canvas.width / video.videoWidth, canvas.height / video.videoHeight);
+            const dx = (canvas.width - video.videoWidth * scale) / 2;
+            const dy = (canvas.height - video.videoHeight * scale) / 2;
+            ctx.drawImage(video, -dx, dy, video.videoWidth * scale, video.videoHeight * scale);
+          }
+          ctx.restore();
+
+          // 2. Draw Vector/SVG Frame overlay
+          if (frameImg) {
+            ctx.drawImage(frameImg, 0, 0, canvas.width, canvas.height);
+          }
+
+          // 3. Draw Brand Sponsors live
+          if (sponsorImages.length > 0) {
+            sponsorImages.forEach(({ img, position }) => {
+              const maxW = 160;
+              const maxH = 80;
+              let w = img.width;
+              let h = img.height;
+              const ratio = Math.min(maxW / w, maxH / h);
+              w *= ratio;
+              h *= ratio;
+
+              let sx = 70;
+              let sy = 1780 - h;
+
+              if (position === 'top_left') {
+                sx = 70;
+                sy = 140;
+              } else if (position === 'top_right') {
+                sx = 1010 - w;
+                sy = 140;
+              } else if (position === 'bottom_left') {
+                sx = 70;
+                sy = 1780 - h;
+              } else if (position === 'bottom_right') {
+                sx = 1010 - w;
+                sy = 1780 - h;
+              } else if (position === 'center') {
+                sx = (1080 - w) / 2;
+                sy = (1920 - h) / 2;
+              }
+
+              // Background badge for logos
+              const pad = 12;
+              ctx.save();
+              ctx.shadowColor = 'rgba(0,0,0,0.3)';
+              ctx.shadowBlur = 10;
+              ctx.fillStyle = 'rgba(255,255,255,0.92)';
+              const blockX = sx - pad;
+              const blockY = sy - pad;
+              const blockW = w + pad * 2;
+              const blockH = h + pad * 2;
+              const r = 16;
+              ctx.beginPath();
+              ctx.moveTo(blockX + r, blockY);
+              ctx.lineTo(blockX + blockW - r, blockY);
+              ctx.quadraticCurveTo(blockX + blockW, blockY, blockX + blockW, blockY + r);
+              ctx.lineTo(blockX + blockW, blockY + blockH - r);
+              ctx.quadraticCurveTo(blockX + blockW, blockY + blockH, blockX + blockW - r, blockY + blockH);
+              ctx.lineTo(blockX + r, blockY + blockH);
+              ctx.quadraticCurveTo(blockX, blockY + blockH, blockX, blockY + blockH - r);
+              ctx.lineTo(blockX, blockY + r);
+              ctx.quadraticCurveTo(blockX, blockY, blockX + r, blockY);
+              ctx.closePath();
+              ctx.fill();
+              ctx.restore();
+
+              // Draw logo
+              ctx.drawImage(img, sx, sy, w, h);
+            });
+          }
+
+          // 4. Draw Watermark Spin360
+          ctx.save();
+          ctx.font = 'bold 22px monospace';
+          ctx.fillStyle = 'rgba(255,255,255,0.45)';
+          ctx.textAlign = 'center';
+          ctx.shadowColor = 'rgba(0,0,0,0.5)';
+          ctx.shadowBlur = 4;
+          ctx.fillText('⚡ SPIN360', 540, 1890);
+          ctx.restore();
+        }
+      }
+
+      animationFrameRef.current = requestAnimationFrame(drawLoop);
+    };
+
+    if (recState !== 'requesting') {
+      animationFrameRef.current = requestAnimationFrame(drawLoop);
     }
+
     return () => {
-      if (liveAudio) {
-        liveAudio.pause();
-        liveAudio.src = '';
+      active = false;
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [event.musicId]);
+  }, [recState, frameImg, sponsorImages]);
+
+  // Fallback save in case of high-level Canvas failure
+  const fallbackRawSave = (rawBlob: Blob) => {
+    try {
+      console.log('[STEP 10] Acionando fallback bruto de segurança');
+      const url = URL.createObjectURL(rawBlob);
+      const id = 'vid_' + Date.now();
+      const slug = Math.random().toString(36).slice(2, 7);
+
+      const video: VideoRecord = {
+        id,
+        slug,
+        eventId: event.id,
+        leadId: lead?.id,
+        url,
+        thumbnailUrl: '',
+        duration: event.videoDuration,
+        status: 'completed',
+        effectAppliedId: event.effectPresetId,
+        frameAppliedId: event.frameId,
+        musicAppliedId: event.musicId,
+        viewsCount: 0,
+        downloadsCount: 0,
+        sharesCount: 0,
+        createdAt: new Date().toISOString(),
+      };
+
+      const friendlyDate = new Date().toISOString().slice(0, 10);
+      const cleanName = event.name.replace(/[^a-zA-Z0-9]/g, '_');
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Spin360_${cleanName}_${friendlyDate}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
+      SpinDb.saveVideo(video);
+      stopStream();
+      setTimeout(() => onRecordingComplete(video), 300);
+    } catch (errFallback) {
+      console.error('Erro crítico no fallback bruto integrado:', errFallback);
+      stopStream();
+      onCancel();
+    }
+  };
 
   const startRecording = useCallback(() => {
-    if (!streamRef.current) return;
-    chunksRef.current = [];
-    const mimeType = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm';
-    const recorder = new MediaRecorder(streamRef.current, { mimeType });
-    mediaRecorderRef.current = recorder;
+    const canvas = canvasRef.current;
+    if (!canvas || !streamRef.current) return;
 
-    // Start live music synchronized playback
-    if (liveAudio) {
-      const track = SpinDb.getMusicTracks().find(t => t.id === event.musicId);
-      liveAudio.currentTime = track?.startPoint || 0;
-      liveAudio.play().catch(e => console.warn('Falha no autoplay de audio de preview:', e));
+    chunksRef.current = [];
+    console.log('[STEP 6] Renderizando Canvas e configurando captura de mídia em tempo real');
+
+    // Mime types to try for compatibility (especially Safari)
+    const mimeTypesToTry = [
+      'video/mp4;codecs=h264',
+      'video/mp4',
+      'video/quicktime',
+      'video/webm;codecs=vp9',
+      'video/webm',
+      ''
+    ];
+
+    let mimeType = '';
+    for (const type of mimeTypesToTry) {
+      if (!type || MediaRecorder.isTypeSupported(type)) {
+        mimeType = type;
+        break;
+      }
     }
 
-    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-    recorder.onstop = async () => {
-      if (liveAudio) {
-        liveAudio.pause();
+    // Capture standard 30 FPS video with burned overlays directly from canvas
+    let mixedStream = new MediaStream();
+    let canvasStream: MediaStream | null = null;
+    let usingCanvas = true;
+
+    try {
+      const getStream = canvas.captureStream || (canvas as any).webkitCaptureStream;
+      if (getStream) {
+        canvasStream = getStream.call(canvas, 30);
       }
-      const rawBlob = new Blob(chunksRef.current, { type: mimeType });
-      setRecState('processing');
+    } catch (e) {
+      console.error('[SAFARI FALLBACK] captureStream falhou:', e);
+    }
+
+    if (canvasStream && canvasStream.getVideoTracks().length > 0) {
+      mixedStream.addTrack(canvasStream.getVideoTracks()[0]);
+    } else {
+      console.warn('[SAFARI FALLBACK] Sem track de vídeo de Canvas. Usando track de câmera direto');
+      usingCanvas = false;
+      if (streamRef.current.getVideoTracks().length > 0) {
+        mixedStream.addTrack(streamRef.current.getVideoTracks()[0]);
+      }
+    }
+
+    // Custom Mix Audio System (Camera Microphone + Music Background) using AudioContext
+    console.log('[STEP 5] Iniciando AudioContext e conexões');
+    let audioContextFailed = false;
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const audioCtx = new AudioCtx();
+      activeAudioContextRef.current = audioCtx;
+      const dest = audioCtx.createMediaStreamDestination();
+
+      // Hook 1: Connect microphone stream
+      if (streamRef.current.getAudioTracks().length > 0) {
+        try {
+          const micSource = audioCtx.createMediaStreamSource(streamRef.current);
+          micSource.connect(dest);
+        } catch (eMic) {
+          console.warn('Erro ao ligar microfone ao AudioContext:', eMic);
+        }
+      }
+
+      // Hook 2: Connect background music track if configured
+      console.log('[STEP 4] Carregando música');
+      const musicTrack = SpinDb.getMusicTracks().find(t => t.id === event.musicId);
+      if (musicTrack) {
+        try {
+          const audio = new Audio(musicTrack.audioUrl);
+          audio.crossOrigin = 'anonymous';
+          audio.loop = musicTrack.loop;
+          audio.volume = musicTrack.volume || 0.8;
+          audio.currentTime = musicTrack.startPoint || 0;
+          activeAudioRef.current = audio;
+
+          audio.oncanplay = () => {
+            console.log('[MUSIC] Música carregada');
+          };
+          audio.onerror = (e) => {
+            console.error('[MUSIC] Música falhou', e);
+          };
+
+          const musicSource = audioCtx.createMediaElementSource(audio);
+          musicSource.connect(dest);
+          audio.play().then(() => {
+            console.log('[MUSIC] Play iniciado com sucesso');
+          }).catch(errPlay => {
+            console.warn('Erro autoplay música na gravação:', errPlay);
+            console.log('[MUSIC] Música falhou');
+          });
+        } catch (errMusicNode) {
+          console.error('[MUSIC] Música falhou', errMusicNode);
+        }
+      } else {
+        console.log('[MUSIC] Música ignorada');
+      }
+
+      // Add combined mixed track to output recorder
+      const mixedAudioTracks = dest.stream.getAudioTracks();
+      if (mixedAudioTracks.length > 0) {
+        mixedStream.addTrack(mixedAudioTracks[0]);
+      } else {
+        audioContextFailed = true;
+      }
+    } catch (errAudioCtx) {
+      console.warn('Falha ao instanciar pipeline de AudioContext:', errAudioCtx);
+      audioContextFailed = true;
+    }
+
+    if (audioContextFailed) {
+      console.log('[STEP 5] Fallback: Adicionando áudio do microfone padrão');
+      if (streamRef.current.getAudioTracks().length > 0) {
+        mixedStream.addTrack(streamRef.current.getAudioTracks()[0]);
+      }
+    }
+
+    // Set up standard encoder
+    let recorder: MediaRecorder | null = null;
+    const recorderOptionsList = [
+      { mimeType, videoBitsPerSecond: 4500000 },
+      { mimeType },
+      {}
+    ];
+
+    for (const options of recorderOptionsList) {
       try {
-        await finishProcessing(rawBlob);
-      } catch (err) {
-        console.error('Falha no pipeline de renderização profissional:', err);
-        // Fallback clean para gravação crua em caso de falha crítica de WebGL/AudioContext
-        fallbackRawSave(rawBlob);
+        if (options.mimeType || Object.keys(options).length === 0) {
+          recorder = new MediaRecorder(mixedStream, options);
+          break;
+        }
+      } catch (e) {
+        console.warn('Falha de criação de MediaRecorder com opções:', options, e);
       }
+    }
+
+    if (!recorder) {
+      console.error('[SAFARI FALLBACK] Todos os MediaRecorders falharam no stream misturado. Tentando gravação pura com a câmera');
+      try {
+        recorder = new MediaRecorder(streamRef.current);
+        usingCanvas = false;
+      } catch (errFinalMedia) {
+        console.error('Falha total e irrecuperável de gravação:', errFinalMedia);
+        setError('Ocorreu um erro no processador de vídeo do aparelho. Certifique-se de usar o Safari/Chrome atualizado.');
+        setRecState('preview');
+        return;
+      }
+    }
+
+    mediaRecorderRef.current = recorder;
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunksRef.current.push(e.data);
+    };
+
+    recorder.onstop = async () => {
+      console.log('[STEP 7] Finalizando MediaRecorder - Gravação em tempo real concluída');
+      if (activeAudioRef.current) {
+        try { activeAudioRef.current.pause(); } catch (_) {}
+      }
+      if (activeAudioContextRef.current) {
+        try { activeAudioContextRef.current.close(); } catch (_) {}
+      }
+
+      console.log('[STEP 8] Gerando Blob final de alta fidelidade');
+      const finalMime = recorder?.mimeType || 'video/mp4';
+      const blob = new Blob(chunksRef.current, { type: finalMime });
+      setRecState('processing');
+
+      // Processing & saving index database takes less than 2 seconds
+      setTimeout(async () => {
+        try {
+          let thumbnailBlob = new Blob([], { type: 'image/jpeg' });
+          if (canvasRef.current) {
+            await new Promise<void>((r) => {
+              canvasRef.current!.toBlob((b) => {
+                if (b) thumbnailBlob = b;
+                r();
+              }, 'image/jpeg', 0.85);
+            });
+          }
+
+          const videoUrl = URL.createObjectURL(blob);
+          const thumbUrl = thumbnailBlob.size > 0 ? URL.createObjectURL(thumbnailBlob) : '';
+
+          const id = 'vid_' + Date.now();
+          const slug = Math.random().toString(36).slice(2, 7);
+
+          console.log('[STEP 9] Salvando no IndexedDB Videos Blob d\'água');
+          try {
+            await saveVideoBlobsToIndexedDB(id, blob, thumbnailBlob);
+          } catch (errIDB) {
+            console.error('[STEP 9] IDB erro:', errIDB);
+          }
+
+          console.log('[STEP 10] Concluído - Descarregando gravação');
+          const compiledVideo: VideoRecord = {
+            id,
+            slug,
+            eventId: event.id,
+            leadId: lead?.id,
+            url: videoUrl,
+            thumbnailUrl: thumbUrl,
+            duration: event.videoDuration,
+            status: 'completed',
+            effectAppliedId: event.effectPresetId,
+            frameAppliedId: event.frameId,
+            musicAppliedId: event.musicId,
+            viewsCount: 0,
+            downloadsCount: 0,
+            sharesCount: 0,
+            createdAt: new Date().toISOString(),
+          };
+
+          // Auto trigger physical local download
+          try {
+            const friendlyDate = new Date().toISOString().slice(0, 10);
+            const cleanName = event.name.replace(/[^a-zA-Z0-9]/g, '_');
+            const a = document.createElement('a');
+            a.href = videoUrl;
+            a.download = `Spin360_${cleanName}_${friendlyDate}.mp4`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          } catch (errDL) {
+            console.error('[STEP 10] Erro ao disparar download no browser:', errDL);
+          }
+
+          SpinDb.saveVideo(compiledVideo);
+          stopStream();
+          setTimeout(() => onRecordingComplete(compiledVideo), 300);
+        } catch (errFinal) {
+          console.error('[STEP 10] Falha geral ao persistizar vídeo, usando fallback básico:', errFinal);
+          fallbackRawSave(blob);
+        }
+      }, 500);
     };
 
     recorder.start(100);
@@ -227,392 +654,81 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
       setTimeLeft(remaining);
       if (remaining <= 0) {
         clearInterval(timerRef.current!);
-        recorder.stop();
+        try {
+          if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+            mediaRecorderRef.current.stop();
+          }
+        } catch (_) {}
       }
     }, 1000);
-  }, [event.videoDuration, liveAudio, event.musicId]);
-
-  // Fallback em caso de erro extremo no Canvas
-  const fallbackRawSave = (rawBlob: Blob) => {
-    const url = URL.createObjectURL(rawBlob);
-    const id = 'vid_' + Date.now();
-    const slug = Math.random().toString(36).slice(2, 7);
-
-    const video: VideoRecord = {
-      id,
-      slug,
-      eventId: event.id,
-      leadId: lead?.id,
-      url,
-      thumbnailUrl: '',
-      duration: event.videoDuration,
-      status: 'completed',
-      effectAppliedId: event.effectPresetId,
-      frameAppliedId: event.frameId,
-      musicAppliedId: event.musicId,
-      viewsCount: 0,
-      downloadsCount: 0,
-      sharesCount: 0,
-      createdAt: new Date().toISOString(),
-    };
-
-    const friendlyDate = new Date().toISOString().slice(0, 10);
-    const cleanName = event.name.replace(/[^a-zA-Z0-9]/g, '_');
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `Spin360_${cleanName}_${friendlyDate}.mp4`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-
-    SpinDb.saveVideo(video);
-    stopStream();
-    setTimeout(() => onRecordingComplete(video), 300);
-  };
-
-  // Canvas-render professional pipeline
-  const finishProcessing = async (rawVideoBlob: Blob) => {
-    // 1. Carregar video crú de background de modo offline
-    const video = document.createElement('video');
-    video.playsInline = true;
-    video.muted = true;
-    video.src = URL.createObjectURL(rawVideoBlob);
-    await new Promise((r) => { video.onloadedmetadata = r; });
-
-    // 2. Setup Canvas com formato rígido de Totem 360 / Stories 1080x1920
-    const canvas = document.createElement('canvas');
-    canvas.width = 1080;
-    canvas.height = 1920;
-    const ctx = canvas.getContext('2d')!;
-
-    // Preload overlays vectoriais (molduras) e logos dos patrocinadores
-    const frameImg = await preloadOverlayImage(frame?.imageUrl || 'cyberpunk');
-    const loadedSponsors = SpinDb.getSponsors().filter(s => event.sponsorIds?.includes(s.id));
-    const sponsorImages = await Promise.all(
-      loadedSponsors.map(async (s) => {
-        const img = await preloadOverlayImage(s.logoUrl);
-        const config = event.sponsorsConfig?.[s.id] || { position: 'bottom_right', order: 1 };
-        return { img, position: config.position };
-      })
-    );
-
-    // 3. Configurar contexto de Audio para mixagem de microfone residual e música de estúdio
-    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const dest = audioCtx.createMediaStreamDestination();
-
-    // Hook audio do video gravado (fala residual/ruído do totem)
-    try {
-      const source = audioCtx.createMediaElementSource(video);
-      const videoGain = audioCtx.createGain();
-      videoGain.gain.value = 0.2; // 20% volume residual para autenticidade
-      source.connect(videoGain);
-      videoGain.connect(dest);
-    } catch (_) {}
-
-    // Track de som do evento de fundo com fade loops
-    let musicAudio: HTMLAudioElement | null = null;
-    const musicTrack = SpinDb.getMusicTracks().find(t => t.id === event.musicId);
-    if (musicTrack) {
-      try {
-        musicAudio = new Audio(musicTrack.audioUrl);
-        musicAudio.crossOrigin = 'anonymous';
-        musicAudio.loop = musicTrack.loop;
-        musicAudio.volume = musicTrack.volume || 0.8;
-        musicAudio.currentTime = musicTrack.startPoint || 0;
-
-        const musicSource = audioCtx.createMediaElementSource(musicAudio);
-        const musicGain = audioCtx.createGain();
-        musicGain.gain.value = musicTrack.volume || 0.8;
-
-        const cur = audioCtx.currentTime;
-        musicGain.gain.setValueAtTime(0, cur);
-        musicGain.gain.linearRampToValueAtTime(musicTrack.volume || 0.8, cur + (musicTrack.fadeIn || 1));
-
-        musicSource.connect(musicGain);
-        musicGain.connect(dest);
-      } catch (_) {}
-    }
-
-    // 4. Iniciar novo codificador de mídia para salvar o Canvas composto com audio masterizado
-    const canvasStream = canvas.captureStream(30);
-    const mixedStream = new MediaStream();
-    mixedStream.addTrack(canvasStream.getVideoTracks()[0]);
-    if (dest.stream.getAudioTracks().length > 0) {
-      mixedStream.addTrack(dest.stream.getAudioTracks()[0]);
-    }
-
-    const mimeType = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm';
-    const outputRecorder = new MediaRecorder(mixedStream, { mimeType });
-    const outputChunks: Blob[] = [];
-
-    outputRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) outputChunks.push(e.data);
-    };
-
-    let capturedThumbnailBlob: Blob | null = null;
-    let resolveOuter: any = null;
-    const promiseComplete = new Promise<{ videoBlob: Blob, thumbnailBlob: Blob }>((res) => {
-      resolveOuter = res;
-    });
-
-    outputRecorder.onstop = () => {
-      const videoBlob = new Blob(outputChunks, { type: mimeType });
-      resolveOuter({
-        videoBlob,
-        thumbnailBlob: capturedThumbnailBlob || new Blob([], { type: 'image/jpeg' })
-      });
-    };
-
-    // 5. Iniciar Renderizadores e playbacks
-    if (musicAudio) {
-      musicAudio.play().catch(() => {});
-    }
-    outputRecorder.start();
-    video.currentTime = 0;
-
-    // Timeline física do preset de velocidade
-    let playbackTime = 0;
-    let rawTime = 0;
-    const fps = 30;
-    const dt = 1 / fps;
-    const preset = SpinDb.getEffectPresets().find(p => p.id === event.effectPresetId);
-
-    const renderNextFrame = async () => {
-      // Calcular velocidade linear da CPU
-      let speed = 1.0;
-      if (preset && preset.steps) {
-        let accum = 0;
-        for (const step of preset.steps) {
-          if (playbackTime >= accum && playbackTime < accum + step.duration) {
-            speed = step.speed;
-            break;
-          }
-          accum += step.duration;
-        }
-      }
-
-      // Sincronizar seek no vídeo bruto
-      video.currentTime = rawTime;
-      await new Promise((r) => { video.onseeked = r; });
-
-      // Desenhar frame do participante espelhado no canvas 1080x1920 (stories aspect-ratio)
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.save();
-      ctx.translate(canvas.width, 0);
-      ctx.scale(-1, 1);
-      const scale = Math.max(canvas.width / video.videoWidth, canvas.height / video.videoHeight);
-      const dx = (canvas.width - video.videoWidth * scale) / 2;
-      const dy = (canvas.height - video.videoHeight * scale) / 2;
-      ctx.drawImage(video, -dx, dy, video.videoWidth * scale, video.videoHeight * scale);
-      ctx.restore();
-
-      // Desenhar moldura por cima
-      if (frameImg) {
-        ctx.drawImage(frameImg, 0, 0, canvas.width, canvas.height);
-      }
-
-      // Desenhar logos nos cantos
-      if (sponsorImages.length > 0) {
-        sponsorImages.forEach(({ img, position }) => {
-          const maxW = 160;
-          const maxH = 80;
-          let w = img.width;
-          let h = img.height;
-          const ratio = Math.min(maxW / w, maxH / h);
-          w *= ratio;
-          h *= ratio;
-
-          let sx = 70;
-          let sy = 1780 - h;
-
-          if (position === 'top_left') {
-            sx = 70;
-            sy = 140;
-          } else if (position === 'top_right') {
-            sx = 1010 - w;
-            sy = 140;
-          } else if (position === 'bottom_left') {
-            sx = 70;
-            sy = 1780 - h;
-          } else if (position === 'bottom_right') {
-            sx = 1010 - w;
-            sy = 1780 - h;
-          } else if (position === 'center') {
-            sx = (1080 - w) / 2;
-            sy = (1920 - h) / 2;
-          }
-
-          // Badge branca arredondada de apoio
-          const pad = 12;
-          ctx.save();
-          ctx.shadowColor = 'rgba(0,0,0,0.3)';
-          ctx.shadowBlur = 10;
-          ctx.fillStyle = 'rgba(255,255,255,0.92)';
-          const blockX = sx - pad;
-          const blockY = sy - pad;
-          const blockW = w + pad * 2;
-          const blockH = h + pad * 2;
-          const r = 16;
-          // draw path
-          ctx.beginPath();
-          ctx.moveTo(blockX + r, blockY);
-          ctx.lineTo(blockX + blockW - r, blockY);
-          ctx.quadraticCurveTo(blockX + blockW, blockY, blockX + blockW, blockY + r);
-          ctx.lineTo(blockX + blockW, blockY + blockH - r);
-          ctx.quadraticCurveTo(blockX + blockW, blockY + blockH, blockX + blockW - r, blockY + blockH);
-          ctx.lineTo(blockX + r, blockY + blockH);
-          ctx.quadraticCurveTo(blockX, blockY + blockH, blockX, blockY + blockH - r);
-          ctx.lineTo(blockX, blockY + r);
-          ctx.quadraticCurveTo(blockX, blockY, blockX + r, blockY);
-          ctx.closePath();
-          ctx.fill();
-          ctx.restore();
-
-          // Logo por cima
-          ctx.drawImage(img, sx, sy, w, h);
-        });
-      }
-
-      // Desenhar marca d'água Spin360
-      ctx.save();
-      ctx.font = 'bold 22px monospace';
-      ctx.fillStyle = 'rgba(255,255,255,0.45)';
-      ctx.textAlign = 'center';
-      ctx.shadowColor = 'rgba(0,0,0,0.5)';
-      ctx.shadowBlur = 4;
-      ctx.fillText('⚡ SPIN360', 540, 1890);
-      ctx.restore();
-
-      // Capturar imagem de miniatura no meio do vídeo
-      if (!capturedThumbnailBlob && rawTime >= video.duration / 2) {
-        await new Promise<void>((r) => {
-          canvas.toBlob((b) => {
-            capturedThumbnailBlob = b;
-            r();
-          }, 'image/jpeg', 0.8);
-        });
-      }
-
-      // Atualizar relógio físico
-      rawTime += dt * speed;
-      playbackTime += dt;
-
-      if (rawTime < video.duration && playbackTime < event.videoDuration) {
-        // Continuar frame seguinte
-        setTimeout(renderNextFrame, 12);
-      } else {
-        // Parar processamento e exportar
-        if (musicAudio) {
-          musicAudio.pause();
-          musicAudio.src = '';
-        }
-        outputRecorder.stop();
-        audioCtx.close();
-      }
-    };
-
-    // Tocar renderizador frame a frame de altíssima nitidez
-    renderNextFrame();
-
-    // Esperar finalizar gravação final do canvas
-    const { videoBlob, thumbnailBlob } = await promiseComplete;
-
-    // Gerar URLs locais de cache de sessão
-    const videoUrl = URL.createObjectURL(videoBlob);
-    const thumbUrl = thumbnailBlob.size > 0 ? URL.createObjectURL(thumbnailBlob) : '';
-
-    const id = 'vid_' + Date.now();
-    const slug = Math.random().toString(36).slice(2, 7);
-
-    // Salvar blobs de forma permanente e irrecuperável no IndexedDB
-    await saveVideoBlobsToIndexedDB(id, videoBlob, thumbnailBlob);
-
-    // Gravar o registro final no banco offline para o feed da galeria
-    const compiledVideo: VideoRecord = {
-      id,
-      slug,
-      eventId: event.id,
-      leadId: lead?.id,
-      url: videoUrl,
-      thumbnailUrl: thumbUrl,
-      duration: event.videoDuration,
-      status: 'completed',
-      effectAppliedId: event.effectPresetId,
-      frameAppliedId: event.frameId,
-      musicAppliedId: event.musicId,
-      viewsCount: 0,
-      downloadsCount: 0,
-      sharesCount: 0,
-      createdAt: new Date().toISOString(),
-    };
-
-    // Acionar download do arquivo físico com formatação nobre
-    const friendlyDate = new Date().toISOString().slice(0, 10);
-    const cleanName = event.name.replace(/[^a-zA-Z0-9]/g, '_');
-    const a = document.createElement('a');
-    a.href = videoUrl;
-    a.download = `Spin360_${cleanName}_${friendlyDate}.mp4`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-
-    SpinDb.saveVideo(compiledVideo);
-    stopStream();
-    setTimeout(() => onRecordingComplete(compiledVideo), 300);
-  };
+  }, [event, lead, onRecordingComplete, stopStream, fallbackRawSave]);
 
   const startCountdown = useCallback(() => {
     setRecState('countdown');
+
+    // Safe direct gesture AudioContext unlock for iOS Safari pre-recording
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioContextClass) {
+        const dummyCtx = new AudioContextClass();
+        dummyCtx.resume().then(() => {
+          dummyCtx.close();
+        });
+      }
+    } catch (e) {
+      console.warn('Silent unlock exception:', e);
+    }
+
     let count = 3;
     setCountdown(count);
     const t = setInterval(() => {
       count--;
       setCountdown(count);
-      if (count <= 0) { clearInterval(t); startRecording(); }
+      if (count <= 0) {
+        clearInterval(t);
+        startRecording();
+      }
     }, 1000);
   }, [startRecording]);
 
   const stopEarly = () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
+      try {
+        mediaRecorderRef.current.stop();
+      } catch (_) {}
       if (timerRef.current) clearInterval(timerRef.current);
     }
   };
 
   const handleCancel = () => { stopStream(); onCancel(); };
 
-  const renderFrame = () => {
-    if (!frame) return null;
-    if (frame.imageUrl.startsWith('http')) {
-      return <img src={frame.imageUrl} alt="frame" className="absolute inset-0 w-full h-full object-cover pointer-events-none z-20" />;
-    }
-    return (
-      <div className="absolute inset-0 pointer-events-none z-20"
-        dangerouslySetInnerHTML={{ __html: DEMO_FRAMES_SVG[frame.imageUrl] || '' }} />
-    );
-  };
-
   const progress = ((event.videoDuration - timeLeft) / event.videoDuration) * 100;
 
   return (
     <div className="fixed inset-0 z-[200] bg-black flex flex-col">
 
-      {/* Câmera + overlays */}
+      {/* Primary Video Container */}
       <div className="relative flex-1 overflow-hidden">
 
+        {/* Hidden video node used only as raw input stream feed */}
         <video
           ref={videoRef}
           autoPlay
           playsInline
           muted
-          className="absolute inset-0 w-full h-full object-cover"
+          className="hidden"
           style={{ transform: 'scaleX(-1)' }}
         />
 
-        {/* Moldura de visualização */}
-        {renderFrame()}
+        {/* Live composited canvas view with zero-delay display overlay matching outputs 100% */}
+        <canvas
+          ref={canvasRef}
+          width={1080}
+          height={1920}
+          className="absolute inset-0 w-full h-full object-cover bg-black"
+        />
 
-        {/* Erro / Permissão */}
+        {/* Request stream errors */}
         {(recState === 'requesting' || error) && (
           <div className="absolute inset-0 flex flex-col items-center justify-center z-30 bg-black/80 p-8 text-center space-y-6">
             <Camera className="w-20 h-20 text-slate-500" />
@@ -628,7 +744,7 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
           </div>
         )}
 
-        {/* Contagem regressiva de estúdio */}
+        {/* Live countdown visual overlay */}
         {recState === 'countdown' && (
           <div className="absolute inset-0 flex items-center justify-center z-30 bg-black/30">
             <span className="text-[160px] font-black text-white drop-shadow-2xl leading-none animate-pulse">
@@ -637,18 +753,18 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
           </div>
         )}
 
-        {/* Processando e compilando em tempo real */}
+        {/* Processing State - Instant compilation and IndexedDB save */}
         {recState === 'processing' && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center z-30 bg-black/85 space-y-4">
+          <div className="absolute inset-0 flex flex-col items-center justify-center z-30 bg-black/90 space-y-4">
             <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
             <p className="text-white font-extrabold text-xl font-display">PROCESSANDO VÍDEO...</p>
             <p className="text-slate-400 text-xs font-mono max-w-[240px] text-center">
-              Renderizando efeitos, música e molduras em qualidade máxima (1080x1920)
+              Salvando arquivo com música, moldura e logos na galeria do celular
             </p>
           </div>
         )}
 
-        {/* HUD de gravação */}
+        {/* Live Recording Header Stats */}
         {recState === 'recording' && (
           <div className="absolute top-6 left-0 right-0 flex justify-between items-center px-5 z-30">
             <div className="flex items-center gap-2 bg-red-600 px-4 py-2 rounded-full shadow-lg">
@@ -666,7 +782,7 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
           </div>
         )}
 
-        {/* Barra de progresso */}
+        {/* Recording Visual timeline bar */}
         {recState === 'recording' && (
           <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-slate-800 z-30">
             <div className="h-full bg-red-500 transition-all duration-1000"
@@ -674,7 +790,7 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
           </div>
         )}
 
-        {/* Botão fechar */}
+        {/* Closing controller */}
         {(recState === 'preview' || recState === 'countdown') && (
           <div className="absolute top-6 right-5 z-40">
             <button onClick={handleCancel}
@@ -685,7 +801,7 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
         )}
       </div>
 
-      {/* Controles inferiores */}
+      {/* Control Footer */}
       <div className="bg-black py-10 flex items-center justify-center gap-8 z-30 safe-area-bottom">
 
         {recState === 'preview' && (
@@ -695,7 +811,7 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
               <X className="w-6 h-6 text-white" />
             </button>
 
-            {/* Botão gravar */}
+            {/* Giant Recording action trigger */}
             <button onClick={startCountdown}
               className="w-24 h-24 rounded-full bg-white flex items-center justify-center shadow-2xl border-4 border-red-500 active:scale-95 transition-transform">
               <div className="w-16 h-16 bg-red-500 rounded-full" />
