@@ -16,8 +16,15 @@ import AdminDashboard from './components/AdminDashboard';
 import LeadCaptureModal from './components/LeadCaptureModal';
 import CameraRecorder from './components/CameraRecorder';
 import VideoPlaybackResult from './components/VideoPlaybackResult';
+import useSupabaseSync from './hooks/useSupabaseSync';
+import useCatalogSync from './useCatalogSync';
+import packageInfo from '../package.json';
 
 export default function App() {
+  // ATIVA OS SINCRONIZADORES SILENCIOSOS
+  useSupabaseSync();
+  useCatalogSync();
+
   // Global View Mode switcher: 'totem' (attendee flow) | 'admin' (control panel) | 'public_video' (phone preview slug)
   const [viewMode, setViewMode] = useState<'totem' | 'admin' | 'public_video'>('totem');
 
@@ -33,7 +40,7 @@ export default function App() {
   const [generatedVideo, setGeneratedVideo] = useState<VideoRecord | null>(null);
 
   // Public Video Slug View (from scanning simulation or manual click)
-  const [publicSlug, setPublicSlug] = useState<string>('e8g4b');
+  const [publicSlug, setPublicSlug] = useState<string>('e8g4b'); // default seeded video for preview
   const [pbCopied, setPbCopied] = useState(false);
   const [pbDownloadSuccess, setPbDownloadSuccess] = useState(false);
   const [showQrCode, setShowQrCode] = useState(false);
@@ -60,13 +67,16 @@ export default function App() {
     setDbTick(prev => prev + 1);
   };
 
+  // Get active events for selection
   const activeEvents = SpinDb.getEvents().filter(e => e.status === 'active');
   const allCompletedVideos = SpinDb.getVideos();
 
+  // Handle choosing an event from selection list
   const handleSelectEvent = (event: Event) => {
     setSelectedEvent(event);
     setActiveLead(null);
     setGeneratedVideo(null);
+
     if (event.enableLeadCapture) {
       setTotemState('lead');
     } else {
@@ -74,17 +84,20 @@ export default function App() {
     }
   };
 
+  // Lead successfully captured
   const handleLeadFormComplete = (lead: VideoLead) => {
     setActiveLead(lead);
     setTotemState('recorder');
   };
 
+  // Video render pipeline successfully complete
   const handleRecordingSuccess = (video: VideoRecord) => {
     setGeneratedVideo(video);
     setTotemState('result');
     triggerDbReload();
   };
 
+  // Reset to totem selection
   const handleResetTotemFlow = () => {
     setSelectedEvent(null);
     setActiveLead(null);
@@ -93,37 +106,46 @@ export default function App() {
     triggerDbReload();
   };
 
+  // View public page from QR action simulator
   const handleNavigateToPublicPreview = (slug: string) => {
     setPublicSlug(slug);
     setViewMode('public_video');
   };
 
+  // Direct download track for public slug page
   const handlePublicDownload = async (vid: VideoRecord) => {
     SpinDb.registerDownload(vid.id);
     setPbDownloadSuccess(true);
     setTimeout(() => setPbDownloadSuccess(false), 3000);
+
     try {
+      // Puxa o arquivo físico em formato Blob para forçar o download local
       const response = await fetch(vid.url);
       const blob = await response.blob();
       const blobUrl = URL.createObjectURL(blob);
+      
       const link = document.createElement('a');
       link.href = blobUrl;
-      link.download = `Real360_Clip_${vid.slug}.mp4`;
+      link.download = `Spin360_Clip_${vid.slug}.mp4`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+      
+      // Limpa a memória
       setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-    } catch {
+    } catch (error) {
+      // Fallback caso seja link externo bloqueado (como o da Mixkit)
       const link = document.createElement('a');
       link.href = vid.url;
       link.target = '_blank';
-      link.download = `Real360_Clip_${vid.slug}.mp4`;
+      link.download = `Spin360_Clip_${vid.slug}.mp4`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
     }
   };
 
+  // Direct share track for public slug page
   const handlePublicShare = async (vid: VideoRecord, channel: string) => {
     SpinDb.registerShare(vid.id, channel as any);
     const shareUrl = `${window.location.origin}?v=${vid.slug}`;
@@ -132,32 +154,60 @@ export default function App() {
 
     if (channel === 'whatsapp') {
       try {
+        // Passo 1: Busca o arquivo real que está gravado na memória (blob)
         const response = await fetch(vid.url);
         const blob = await response.blob();
-        const file = new File([blob], `Real360_${vid.slug}.mp4`, { type: 'video/mp4' });
+        
+        // Passo 2: Monta o arquivo MP4 físico
+        const file = new File([blob], `Spin360_${vid.slug}.mp4`, { type: 'video/mp4' });
+
+        // Passo 3: Força a gaveta nativa do iOS/Android a anexar o arquivo direto no WhatsApp
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
-          await navigator.share({ title: shareTitle, text: 'Dá uma olhada no meu vídeo!', files: [file] });
+          await navigator.share({
+            title: shareTitle,
+            text: 'Dá uma olhada no meu vídeo gravado na ativação Real 360°!',
+            files: [file]
+          });
           return;
         }
-      } catch {}
+      } catch (err) {
+        console.warn('Falha ao anexar arquivo de vídeo nativamente', err);
+      }
+
+      // Fallback: Se estiver no PC ou em navegador antigo, manda o link original
       window.open(`https://wa.me/?text=${encodeURIComponent(shareText)}`, '_blank');
       return;
     }
 
     if (channel === 'airdrop' || channel === 'nearby') {
       try {
+        // Transforma o vídeo em arquivo nativo MP4
         const response = await fetch(vid.url);
         const blob = await response.blob();
-        const file = new File([blob], `Real360_${vid.slug}.mp4`, { type: 'video/mp4' });
+        const file = new File([blob], `Spin360_${vid.slug}.mp4`, { type: 'video/mp4' });
+
+        // Abre a gaveta do iOS/Android já com o arquivo carregado
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
-          await navigator.share({ title: shareTitle, text: 'Confira meu vídeo!', files: [file] });
+          await navigator.share({
+            title: shareTitle,
+            text: 'Confira meu vídeo gravado no Real 360°!',
+            files: [file]
+          });
           return;
         }
-      } catch {}
+      } catch (err) {
+        console.warn('Falha ao extrair arquivo físico para AirDrop:', err);
+      }
+
+      // Fallback de segurança enviando apenas o link
       if (navigator.share) {
-        try { await navigator.share({ title: shareTitle, text: shareText, url: shareUrl }); } catch {}
+        try {
+          await navigator.share({ title: shareTitle, text: shareText, url: shareUrl });
+        } catch (err) {
+          // Usuário cancelou ou não suportado
+        }
       } else {
-        alert('Compartilhamento nativo não suportado. Tente pelo Chrome ou Safari.');
+        alert('Compartilhamento nativo não suportado neste navegador. Tente pelo Chrome ou Safari.');
       }
       return;
     }
@@ -188,7 +238,9 @@ export default function App() {
       <header className="bg-slate-900 border-b border-slate-800 px-4 py-3 sticky top-0 z-50 shadow-md">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-3">
           
+          {/* Logo Brand: Real 360° Oficial */}
           <div className="flex items-center gap-2.5 cursor-pointer" onClick={handleResetTotemFlow}>
+            {/* Imagem da Logo Nova - Estilo App Icon */}
             <img 
               src="/Logo.nova.png" 
               alt="Real 360° Logo" 
@@ -199,13 +251,18 @@ export default function App() {
                 <h1 className="text-lg font-display font-black text-white tracking-tight">REAL 360°</h1>
                 <span className="text-[9px] bg-amber-900/40 text-amber-400 px-1.5 py-0.5 rounded border border-amber-700/30 uppercase font-bold tracking-wider font-mono">PWA</span>
               </div>
-              <p className="text-[10px] text-slate-400 font-mono">Real Promotion Engine v1.0</p>
+              <p className="text-[10px] text-slate-400 font-mono">Real Promotion Engine V.{packageInfo.version}</p>
             </div>
           </div>
 
+          {/* VIEW MODE TOGGLE RAIL */}
           <div className="flex items-center bg-slate-950 p-1.5 rounded-2xl border border-slate-850 text-xs font-medium gap-1">
             <button 
-              onClick={() => { setViewMode('totem'); handleResetTotemFlow(); }}
+              onClick={() => {
+                setViewMode('totem');
+                handleResetTotemFlow();
+              }}
+              style={{ contentVisibility: 'auto' }}
               className={`px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer ${viewMode === 'totem' ? 'bg-indigo-600 text-white shadow font-bold' : 'text-slate-400 hover:text-white'}`}>
               <MonitorPlay className="w-3.5 h-3.5" />
               <span>Totem de Gravação</span>
@@ -221,6 +278,7 @@ export default function App() {
             <button 
               onClick={() => {
                 setViewMode('public_video');
+                // Select first completed video to preview
                 const allVids = SpinDb.getVideos();
                 if (allVids.length > 0) setPublicSlug(allVids[0].slug);
               }}
@@ -230,6 +288,7 @@ export default function App() {
             </button>
           </div>
 
+          {/* Quick Support Tag */}
           <div className="hidden lg:flex items-center gap-2 text-slate-500 font-mono text-[10px]">
             <span>OPERADOR: jqcjunior1981</span>
             <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
@@ -241,12 +300,15 @@ export default function App() {
       {/* CORE ACTIVE SCENE */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 py-8">
         
+        {/* VIEW MODE: ATTEMDEE/TOTEM INGRESS OVERVIEW */}
         {viewMode === 'totem' && (
           <div className="h-full">
             
+            {/* SUBSTATE: Selection of active events */}
             {totemState === 'selection' && (
               <div className="space-y-8 animate-fade-in">
                 
+                {/* Greetings Banner */}
                 <div className="text-center space-y-3 py-4 max-w-xl mx-auto">
                   <div className="inline-flex items-center gap-1.5 bg-indigo-500/10 text-indigo-400 px-3 py-1 rounded-full text-[10px] font-bold font-mono tracking-widest uppercase border border-indigo-500/20">
                     <Star className="w-3.5 h-3.5 fill-current" /> Ativação de Marca Real 360°
@@ -259,12 +321,14 @@ export default function App() {
                   </p>
                 </div>
 
+                {/* Grid of active events */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {activeEvents.map((e) => (
                     <div 
                       key={e.id}
                       className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl flex flex-col justify-between hover:border-slate-700 transition-all group p-1.5">
                       
+                      {/* Event cover picture */}
                       <div className="relative aspect-video rounded-2xl overflow-hidden bg-slate-950">
                         {e.coverUrl ? (
                           <img referrerPolicy="no-referrer" src={e.coverUrl} alt={e.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
@@ -287,10 +351,12 @@ export default function App() {
                         </p>
                       </div>
 
+                      {/* Footer statistics and join button */}
                       <div className="p-4 bg-slate-950/60 rounded-2xl mx-1.5 mb-1.5 flex justify-between items-center text-xs">
                         <span className="font-mono text-slate-500 flex items-center gap-1">
                           <Flame className="w-3.5 h-3.5 text-red-500" /> Totem Ativo
                         </span>
+                        
                         <button
                           onClick={() => handleSelectEvent(e)}
                           className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold font-mono text-[11px] tracking-wider transition-all flex items-center gap-1 shadow-lg shadow-indigo-950/30 cursor-pointer">
@@ -302,25 +368,28 @@ export default function App() {
                     </div>
                   ))}
 
+                  {/* Empty state when no events are active */}
                   {activeEvents.length === 0 && (
                     <div className="col-span-full bg-slate-900 border border-slate-800 p-8 rounded-3xl text-center space-y-3">
                       <p className="text-slate-400 text-xs font-mono">
-                        Nenhum evento registrado com status &quot;Ativo&quot; no momento.
+                        Nenhum evento registrado comercialmente com status &quot;Ativo&quot; no momento.
                       </p>
                       <button 
                         onClick={() => setViewMode('admin')}
                         className="bg-indigo-600 text-white px-3.5 py-2 rounded-xl text-xs font-bold font-mono cursor-pointer">
-                        Ir ao Painel Admin para Ativar
+                        Ir ao Painel de Eventos para Ativar
                       </button>
                     </div>
                   )}
                 </div>
 
+                {/* Finished recordings logs list for quick access preview */}
                 {allCompletedVideos.length > 0 && (
                   <div className="border-t border-slate-850 pt-8 mt-12 bg-slate-900/30 p-6 rounded-3xl border border-slate-800/80">
                     <h3 className="text-white text-sm font-mono uppercase tracking-widest mb-4 flex items-center gap-2">
-                      <QrCode className="w-4.5 h-4.5 text-indigo-400" /> Galeria de Registros Recentes
+                      <QrCode className="w-4.5 h-4.5 text-indigo-400" /> Galeria de Registros Recentes (Emulador)
                     </h3>
+                    
                     <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-4">
                       {allCompletedVideos.slice(-6).map((vid) => {
                         const evt = SpinDb.getEvents().find(ex => ex.id === vid.eventId);
@@ -330,6 +399,7 @@ export default function App() {
                             style={{ borderTopColor: evt?.themeColor || '#6366f1' }}
                             className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden p-2 flex flex-col justify-between border-t-4 hover:border-slate-600 cursor-pointer transition-all"
                             onClick={() => handleNavigateToPublicPreview(vid.slug)}>
+                            
                             <div className="aspect-[9/16] bg-slate-900 rounded-lg overflow-hidden relative">
                               <video src={vid.url} muted playsInline className="w-full h-full object-cover" />
                               <div className="absolute inset-0 bg-black/40 flex items-center justify-center p-1 text-center">
@@ -338,10 +408,12 @@ export default function App() {
                                 </span>
                               </div>
                             </div>
+
                             <div className="text-[10px] font-mono mt-2 flex justify-between text-slate-500">
-                              <span>👁 {vid.viewsCount} views</span>
+                              <span>🌍 {vid.viewsCount} views</span>
                               <span>💾 {vid.downloadsCount} dls</span>
                             </div>
+
                           </div>
                         );
                       })}
@@ -352,6 +424,7 @@ export default function App() {
               </div>
             )}
 
+            {/* SUBSTATE: Lead form validation */}
             {totemState === 'lead' && selectedEvent && (
               <LeadCaptureModal 
                 event={selectedEvent}
@@ -360,6 +433,7 @@ export default function App() {
               />
             )}
 
+            {/* SUBSTATE: Active Camera recording screen */}
             {totemState === 'recorder' && selectedEvent && (
               <CameraRecorder 
                 event={selectedEvent}
@@ -369,6 +443,7 @@ export default function App() {
               />
             )}
 
+            {/* SUBSTATE: Post-rendered share result */}
             {totemState === 'result' && generatedVideo && selectedEvent && (
               <VideoPlaybackResult 
                 video={generatedVideo}
@@ -380,9 +455,11 @@ export default function App() {
           </div>
         )}
 
+        {/* VIEW MODE: OPERATOR WORKSPACE (CRUDS & METRICS) */}
         {viewMode === 'admin' && (
           <AdminDashboard 
             onSelectEventForCapture={(evt) => {
+              // Direct launcher launch on active selection
               setSelectedEvent(evt);
               setViewMode('totem');
               if (evt.enableLeadCapture) {
@@ -394,6 +471,7 @@ export default function App() {
           />
         )}
 
+        {/* VIEW MODE: PUBLIC VIDEO STREAM GATEWAY (MOCK SMARTPHONE SITE) */}
         {viewMode === 'public_video' && (
           <div className="max-w-sm mx-auto space-y-4 py-4">
             {(() => {
@@ -413,6 +491,7 @@ export default function App() {
               return (
                 <div className="space-y-4">
 
+                  {/* Header */}
                   <div className="text-center space-y-1">
                     <span className="text-[10px] font-mono bg-emerald-950/80 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-full uppercase font-bold tracking-wider">
                       ✓ Vídeo Verificado Legal (LGPD)
@@ -423,6 +502,7 @@ export default function App() {
                     <p className="text-xs text-slate-400">{associatedEvt?.name || 'Ativação Real 360°'}</p>
                   </div>
 
+                  {/* QR Code — destaque principal */}
                   <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 flex flex-col items-center gap-3">
                     <p className="text-xs font-bold text-white">Aponte a câmera para baixar</p>
                     <img
@@ -433,12 +513,14 @@ export default function App() {
                     <p className="text-[10px] text-slate-500 font-mono text-center break-all px-2">{shareUrl}</p>
                   </div>
 
+                  {/* Métricas rápidas */}
                   <div className="bg-slate-900/60 border border-slate-800 rounded-2xl px-4 py-3 flex justify-between text-[11px] font-mono text-slate-400">
                     <span>👁 {currentVideo.viewsCount} visualizações</span>
                     <span>💾 {currentVideo.downloadsCount} downloads</span>
                     <span>🔗 {currentVideo.sharesCount} shares</span>
                   </div>
 
+                  {/* Botões de ação */}
                   <div className="space-y-2.5">
 
                     <button
@@ -487,6 +569,7 @@ export default function App() {
 
       </main>
 
+      {/* FOOTER METADATA BRAND MARK */}
       <footer className="bg-slate-950 border-t border-slate-900 py-6 px-4">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4 text-xs text-slate-500 font-mono">
           <div>
