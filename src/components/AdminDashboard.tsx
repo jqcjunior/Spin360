@@ -150,7 +150,7 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
   const presetThemes = ['#6366f1', '#ca8a04', '#ef4444', '#d946ef', '#10b981', '#06b6d4'];
 
   // Handle Event create/edit submission
-  const handleEventSave = (e: React.FormEvent) => {
+  const handleEventSave = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!evtFrameId) {
@@ -183,6 +183,34 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
     };
 
     SpinDb.saveEvent(eventData);
+    try {
+      const { supabase } = await import('../lib/supabase');
+      await (supabase.from('events') as any).upsert({
+        id: eventData.id,
+        name: eventData.name,
+        description: eventData.description || null,
+        event_date: eventData.date || null,
+        event_time: eventData.time || null,
+        cover_image_url: eventData.coverUrl || null,
+        status: eventData.status,
+        category: eventData.category || 'Geral',
+        frame_id: eventData.frameId || null,
+        music_id: eventData.musicId || null,
+        video_duration_seconds: eventData.videoDuration,
+        theme_color: eventData.themeColor || '#6366f1',
+        totem_mode_enabled: eventData.enableTotemMode || false,
+        lead_capture_config: {
+          enabled: eventData.enableLeadCapture,
+          fields: eventData.requiredLeadFields,
+          lgpd_text: eventData.lgpdConsentText,
+        },
+        created_at: eventData.createdAt,
+        updated_at: eventData.updatedAt,
+      });
+      console.log('[AdminDashboard] Evento salvo no Supabase:', eventData.name);
+    } catch (err) {
+      console.error('[AdminDashboard] Erro ao salvar evento no Supabase:', err);
+    }
     setIsEventModalOpen(false);
     setEditingEvent(null);
     triggerReload();
@@ -236,9 +264,15 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
     setIsEventModalOpen(true);
   };
 
-  const handleDeleteEvent = (id: string) => {
+  const handleDeleteEvent = async (id: string) => {
     if (confirm("Deseja realmente excluir este evento? Todos os logs do evento serão mantidos para auditoria.")) {
       SpinDb.deleteEvent(id);
+      try {
+        const { supabase } = await import('../lib/supabase');
+        await supabase.from('events').delete().eq('id', id);
+      } catch (err) {
+        console.error('[AdminDashboard] Erro ao deletar evento no Supabase:', err);
+      }
       triggerReload();
     }
   };
