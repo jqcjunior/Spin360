@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useTransition, useMemo } from 'react';
+import React, { useState, useTransition, useMemo, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
   AreaChart, Area, Legend, Cell, PieChart, Pie
@@ -29,6 +30,38 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
 
   // Trigger Database reloads
   const [dbTick, setDbTick] = useState(0);
+  const [supabaseFrames, setSupabaseFrames] = useState<Frame[]>([]);
+  const [supabaseTracks, setSupabaseTracks] = useState<MusicTrack[]>([]);
+
+  useEffect(() => {
+    const loadCatalog = async () => {
+      const { data: framesData } = await supabase.from('frames').select('id, name, image_url, tags, is_active').eq('is_active', true);
+      const { data: tracksData } = await supabase.from('music_tracks').select('id, name, file_url, volume, fade_in_seconds, fade_out_seconds, is_loop, start_point_seconds').eq('is_active', true);
+
+      if (framesData) {
+        const mapped = framesData.map((f: any) => ({
+          id: f.id, name: f.name, imageUrl: f.image_url,
+          category: 'Geral', tags: f.tags || [], isActive: true,
+          createdAt: new Date().toISOString(),
+        }));
+        setSupabaseFrames(mapped);
+        mapped.forEach(f => SpinDb.saveFrame(f));
+      }
+
+      if (tracksData) {
+        const mapped = tracksData.map((t: any) => ({
+          id: t.id, title: t.name, artist: '', audioUrl: t.file_url,
+          volume: t.volume || 0.8, fadeIn: t.fade_in_seconds || 1,
+          fadeOut: t.fade_out_seconds || 1, loop: t.is_loop || true,
+          startPoint: t.start_point_seconds || 0, endPoint: 30,
+          createdAt: new Date().toISOString(),
+        }));
+        setSupabaseTracks(mapped);
+        mapped.forEach(t => SpinDb.saveMusicTrack(t));
+      }
+    };
+    loadCatalog();
+  }, []);
   const [isPending, startTransition] = useTransition();
   const triggerReload = () => startTransition(() => setDbTick(prev => prev + 1));
 
@@ -183,33 +216,30 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
     };
 
     SpinDb.saveEvent(eventData);
+
+    // Salva no Supabase com frame_id e music_id válidos (UUID do Supabase)
     try {
-      const { supabase } = await import('../lib/supabase');
-      await (supabase.from('events') as any).upsert({
-        id: eventData.id,
+      const frameUuid = eventData.frameId?.length === 36 ? eventData.frameId : null;
+      const musicUuid = eventData.musicId?.length === 36 ? eventData.musicId : null;
+      
+      await supabase.from('events').upsert({
+        id: eventData.id?.length === 36 ? eventData.id : undefined,
         name: eventData.name,
         description: eventData.description || null,
-        event_date: eventData.date || null,
-        event_time: eventData.time || null,
-        cover_image_url: eventData.coverUrl || null,
         status: eventData.status,
         category: eventData.category || 'Geral',
-        frame_id: eventData.frameId || null,
-        music_id: eventData.musicId || null,
+        frame_id: frameUuid,
+        music_id: musicUuid,
         video_duration_seconds: eventData.videoDuration,
         theme_color: eventData.themeColor || '#6366f1',
         totem_mode_enabled: eventData.enableTotemMode || false,
-        lead_capture_config: {
-          enabled: eventData.enableLeadCapture,
-          fields: eventData.requiredLeadFields,
-          lgpd_text: eventData.lgpdConsentText,
-        },
+        lead_capture_config: { enabled: eventData.enableLeadCapture, fields: eventData.requiredLeadFields },
         created_at: eventData.createdAt,
-        updated_at: eventData.updatedAt,
-      });
-      console.log('[AdminDashboard] Evento salvo no Supabase:', eventData.name);
+        updated_at: new Date().toISOString(),
+      } as any);
+      console.log('[Admin] Evento salvo no Supabase:', eventData.name);
     } catch (err) {
-      console.error('[AdminDashboard] Erro ao salvar evento no Supabase:', err);
+      console.error('[Admin] Erro Supabase:', err);
     }
     setIsEventModalOpen(false);
     setEditingEvent(null);
@@ -1153,7 +1183,7 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
                     value={evtFrameId} onChange={e => setEvtFrameId(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white focus:outline-none">
                     <option value="">Selecione uma Moldura...</option>
-                    {frames.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                    {[...supabaseFrames, ...frames.filter(f => !supabaseFrames.find(sf => sf.id === f.id))].map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
                   </select>
                 </div>
 
@@ -1187,7 +1217,7 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
                     value={evtMusicId} onChange={e => setEvtMusicId(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white">
                     <option value="">Sem música</option>
-                    {tracks.map(t => <option key={t.id} value={t.id}>{t.title} — {t.artist}</option>)}
+                    {[...supabaseTracks, ...tracks.filter(t => !supabaseTracks.find(st => st.id === t.id))].map(t => <option key={t.id} value={t.id}>{t.title} — {t.artist}</option>)}
                   </select>
                 </div>
               </div>
