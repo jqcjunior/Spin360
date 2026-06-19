@@ -67,66 +67,28 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Vid
 
   const handleShare = (channel: 'whatsapp' | 'instagram' | 'facebook' | 'tiktok' | 'airdrop' | 'link' | 'qrcode' | 'other') => {
     SpinDb.registerShare(video.id, channel);
-    setSelectedChannel(channel);
 
     if (channel === 'link') {
       navigator.clipboard.writeText(publicVideoUrl);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } else {
-      // Simulate external opening
-      let uri = '';
-      if (channel === 'whatsapp') {
-        const text = encodeURIComponent(`Olha só que incrível ficou o meu vídeo 360 no evento ${event.name}! Veja aqui: ${publicVideoUrl}`);
-        uri = `https://api.whatsapp.com/send?text=${text}`;
-      } else if (channel === 'instagram') {
-        uri = `https://instagram.com`;
-      }
-      if (uri) {
-        window.open(uri, '_blank');
-      }
+      setTimeout(() => setCopied(false), 2500);
+      return;
+    }
+
+    if (channel === 'whatsapp') {
+      const text = encodeURIComponent(`Veja meu vídeo do evento ${event.name}! Baixe aqui: ${publicVideoUrl}`);
+      window.open(`https://wa.me/?text=${text}`, '_blank');
+      return;
+    }
+
+    if (channel === 'instagram') {
+      navigator.clipboard.writeText(publicVideoUrl);
+      alert('Link copiado! Cole no Instagram Stories ou Direct.');
+      return;
     }
   };
 
-  // Build beautiful simulated vector QR Code pointing to this specific slug URL!
-  // Since we don't have a qrcode package, we can draw a high-fidelity stylized modern QR Code block dynamically!
-  const renderSVGQRCode = () => {
-    return (
-      <svg className="w-28 h-28 text-slate-900 border border-slate-200 p-1 bg-white rounded-lg" viewBox="0 0 100 100">
-        {/* Core finder patterns */}
-        <rect x="0" y="0" width="30" height="30" fill="currentColor" />
-        <rect x="5" y="5" width="20" height="20" fill="white" />
-        <rect x="10" y="10" width="10" height="10" fill="currentColor" />
 
-        <rect x="70" y="0" width="30" height="30" fill="currentColor" />
-        <rect x="75" y="5" width="20" height="20" fill="white" />
-        <rect x="80" y="10" width="10" height="10" fill="currentColor" />
-
-        <rect x="0" y="70" width="30" height="30" fill="currentColor" />
-        <rect x="5" y="75" width="20" height="20" fill="white" />
-        <rect x="10" y="80" width="10" height="10" fill="currentColor" />
-
-        {/* Alignment pattern */}
-        <rect x="75" y="75" width="10" height="10" fill="currentColor" />
-        <rect x="70" y="70" width="5" height="5" fill="currentColor" />
-
-        {/* Shuffled mock data blocks */}
-        <rect x="40" y="5" width="10" height="5" fill="currentColor" />
-        <rect x="40" y="15" width="20" height="5" fill="currentColor" />
-        <rect x="55" y="25" width="5" height="15" fill="currentColor" />
-        <rect x="5" y="40" width="20" height="5" fill="currentColor" />
-        <rect x="15" y="50" width="5" height="15" fill="currentColor" />
-        <rect x="40" y="45" width="15" height="5" fill="currentColor" />
-        <rect x="35" y="60" width="10" height="10" fill="currentColor" />
-        <rect x="55" y="55" width="5" height="20" fill="currentColor" />
-        <rect x="70" y="40" width="15" height="5" fill="currentColor" />
-        <rect x="85" y="45" width="10" height="15" fill="currentColor" />
-        <rect x="70" y="60" width="10" height="5" fill="currentColor" />
-        <rect x="10" y="90" width="40" height="5" fill="currentColor" />
-        <rect x="5" y="5" width="5" height="5" fill="currentColor" />
-      </svg>
-    );
-  };
 
   const themeHex = event.themeColor || '#6366f1';
 
@@ -187,15 +149,24 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Vid
             </p>
           </div>
 
-          {/* QR CODE DYNAMIC BOX */}
+          {/* QR Code real apontando para URL pública do vídeo */}
           <div className="flex items-center gap-4 p-4 bg-slate-950 rounded-2xl border border-slate-800/80">
-            {renderSVGQRCode()}
+            {(() => {
+              const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(publicVideoUrl)}&bgcolor=0f172a&color=ffffff&margin=8`;
+              return (
+                <img
+                  src={qrUrl}
+                  alt="QR Code do vídeo"
+                  className="w-28 h-28 rounded-xl border border-slate-700 flex-none"
+                />
+              );
+            })()}
             <div className="flex-1 space-y-1.5">
               <div className="text-[10px] font-mono text-indigo-400 font-bold uppercase tracking-wider flex items-center gap-1">
-                <QrCode className="w-3.5 h-3.5" /> Código de Acesso
+                <QrCode className="w-3.5 h-3.5" /> Escaneie para baixar
               </div>
-              <p className="text-[11px] text-slate-300 leading-snug font-medium">
-                Sua URL única de download é:
+              <p className="text-[11px] text-slate-300 leading-snug">
+                Aponte a câmera do celular para baixar o vídeo
               </p>
               <span className="text-[10px] bg-slate-900 border border-slate-800 text-slate-400 p-1.5 rounded font-mono inline-block w-full truncate">
                 {publicVideoUrl}
@@ -220,25 +191,44 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Vid
             )}
 
             {/* Quick social sharing horizontal bar */}
-            <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-3">
-              <span className="text-[9px] font-mono text-slate-500 block mb-2 uppercase text-center font-bold">COMPARTILHAR NO SEU CELULAR</span>
-              
+            <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-3 space-y-2">
+              <span className="text-[9px] font-mono text-slate-500 block uppercase text-center font-bold">COMPARTILHAR / ENVIAR</span>
+
+              <button
+                onClick={async () => {
+                  SpinDb.registerShare(video.id, 'airdrop');
+                  if (navigator.share) {
+                    try {
+                      await navigator.share({
+                        title: `Meu vídeo — ${event.name}`,
+                        url: publicVideoUrl,
+                      });
+                    } catch (_) {}
+                  } else {
+                    navigator.clipboard.writeText(publicVideoUrl);
+                    alert('Link copiado! Compartilhe como preferir.');
+                  }
+                }}
+                className="w-full py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors">
+                <Share2 className="w-4 h-4" /> AirDrop / Compartilhar
+              </button>
+
               <div className="grid grid-cols-3 gap-1.5 text-[10px]">
-                <button 
+                <button
                   onClick={() => handleShare('whatsapp')}
-                  className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 flex flex-col items-center gap-1 cursor-pointer transition-colors text-slate-300">
+                  className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 flex flex-col items-center gap-1 cursor-pointer text-slate-300">
                   <MessageCircle className="w-4 h-4 text-emerald-500" />
                   <span>WhatsApp</span>
                 </button>
-                <button 
+                <button
                   onClick={() => handleShare('instagram')}
-                  className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 flex flex-col items-center gap-1 cursor-pointer transition-colors text-slate-300">
+                  className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 flex flex-col items-center gap-1 cursor-pointer text-slate-300">
                   <Instagram className="w-4 h-4 text-pink-500" />
                   <span>Instagram</span>
                 </button>
-                <button 
+                <button
                   onClick={() => handleShare('link')}
-                  className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 flex flex-col items-center gap-1 cursor-pointer transition-colors text-slate-300 relative">
+                  className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 flex flex-col items-center gap-1 cursor-pointer text-slate-300">
                   {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4 text-indigo-400" />}
                   <span>{copied ? 'Copiado!' : 'Copiar Link'}</span>
                 </button>
