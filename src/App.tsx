@@ -129,6 +129,28 @@ export default function App() {
     const shareText = `Assista e baixe meu vídeo gravado na ativação Spin 360: ${shareUrl}`;
 
     if (channel === 'whatsapp') {
+      try {
+        // Passo 1: Busca o arquivo real que está gravado na memória (blob)
+        const response = await fetch(vid.url);
+        const blob = await response.blob();
+        
+        // Passo 2: Monta o arquivo MP4 físico
+        const file = new File([blob], `Spin360_${vid.slug}.mp4`, { type: 'video/mp4' });
+
+        // Passo 3: Força a gaveta nativa do iOS/Android a anexar o arquivo direto no WhatsApp
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            title: shareTitle,
+            text: 'Dá uma olhada no meu vídeo gravado na ativação Spin 360!',
+            files: [file]
+          });
+          return;
+        }
+      } catch (err) {
+        console.warn('Falha ao anexar arquivo de vídeo nativamente', err);
+      }
+
+      // Fallback: Se estiver no PC ou em navegador antigo, manda o link original
       window.open(`https://wa.me/?text=${encodeURIComponent(shareText)}`, '_blank');
       return;
     }
