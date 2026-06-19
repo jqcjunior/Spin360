@@ -400,3 +400,10 @@ export default function App() {
           </div>
           <div className="flex gap-4 items-center">
             <span className="flex items-center gap-1"><ShieldCheck className="w-4 h-4 text-emerald-500" /> RLS Ativo</span>
+            <span className="text-indigo-400">PWA Instalável</span>
+          </div>
+        </div>
+      </footer>
+    </div>
+  );
+}
