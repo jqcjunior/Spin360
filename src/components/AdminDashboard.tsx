@@ -1263,6 +1263,38 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
                     <span className="text-white text-xs">Capturar dados do participante antes de gravar (LGPD)</span>
                   </label>
 
+                  {evtLeads && (
+                    <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl space-y-2 mt-2">
+                      <span className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Campos obrigatórios:</span>
+                      <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-300">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" checked={evtLeadFields.name} onChange={e => setEvtLeadFields({ ...evtLeadFields, name: e.target.checked })} className="rounded text-indigo-500" />
+                          <span>Nome</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" checked={evtLeadFields.phone} onChange={e => setEvtLeadFields({ ...evtLeadFields, phone: e.target.checked })} className="rounded text-indigo-500" />
+                          <span>WhatsApp</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" checked={evtLeadFields.city} onChange={e => setEvtLeadFields({ ...evtLeadFields, city: e.target.checked })} className="rounded text-indigo-500" />
+                          <span>Cidade</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" checked={evtLeadFields.email} onChange={e => setEvtLeadFields({ ...evtLeadFields, email: e.target.checked })} className="rounded text-indigo-500" />
+                          <span>E-mail</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" checked={evtLeadFields.instagram} onChange={e => setEvtLeadFields({ ...evtLeadFields, instagram: e.target.checked })} className="rounded text-indigo-500" />
+                          <span>Instagram</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" checked={evtLeadFields.company} onChange={e => setEvtLeadFields({ ...evtLeadFields, company: e.target.checked })} className="rounded text-indigo-500" />
+                          <span>Empresa</span>
+                        </label>
+                      </div>
+                    </div>
+                  )}
+
                 </div>
               </details>
 
