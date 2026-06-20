@@ -13,8 +13,15 @@ export class RecordingService {
       this.chunks = [];
       this.onStopCallback = onStop;
 
-      const mimeType = ['video/webm;codecs=vp9,opus', 'video/webm', 'video/mp4']
-        .find(t => MediaRecorder.isTypeSupported(t)) || '';
+      const mimeType = [
+        'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+        'video/mp4;codecs="avc1.42E01E"',
+        'video/mp4;codecs=h264',
+        'video/mp4',
+        'video/webm;codecs=h264',
+        'video/webm;codecs=vp9,opus',
+        'video/webm'
+      ].find(t => MediaRecorder.isTypeSupported(t)) || '';
 
       const rec = new MediaRecorder(stream, {
         ...(mimeType ? { mimeType } : {}),
