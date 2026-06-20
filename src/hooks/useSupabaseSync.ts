@@ -19,9 +19,10 @@ export default function useSupabaseSync() {
           const blob = await response.blob();
           const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
           const filePath = `${video.eventId}/${video.slug}.${ext}`;
+          const contentType = blob.type.includes('mp4') ? 'video/mp4' : 'video/webm';
           const { error: uploadError } = await supabase.storage
             .from('videos-processed')
-            .upload(filePath, blob, { contentType: blob.type, upsert: true });
+            .upload(filePath, blob, { contentType, upsert: true });
           if (uploadError) throw uploadError;
           const { data } = supabase.storage.from('videos-processed').getPublicUrl(filePath);
           await (supabase.from('videos') as any).upsert({

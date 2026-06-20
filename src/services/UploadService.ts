@@ -36,9 +36,10 @@ export class UploadService {
           metadata: { eventId, videoId, slug, attempt: retryCount + 1 },
         });
 
+        const contentType = blob.type.includes('mp4') ? 'video/mp4' : 'video/webm';
         const { error: upErr } = await supabase.storage
           .from('videos-processed')
-          .upload(path, blob, { contentType: blob.type, upsert: true });
+          .upload(path, blob, { contentType, upsert: true });
 
         if (upErr) throw upErr;
 

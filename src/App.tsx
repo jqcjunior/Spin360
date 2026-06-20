@@ -9,9 +9,10 @@ import {
   ArrowRight, ShieldCheck, Download,
   Share2, Check, Copy, MessageCircle, Flame, Star
 } from 'lucide-react';
-import { Event, VideoRecord, VideoLead } from './types';
+import { Event, VideoRecord, VideoLead, VideoStatus } from './types';
 import { SpinDb } from './db';
 import { getActiveEvents } from './lib/api';
+import { supabase } from './lib/supabase';
 import AdminDashboard from './components/AdminDashboard';
 import AuthGuard from './components/AuthGuard';
 import LeadCaptureModal from './components/LeadCaptureModal';
@@ -30,6 +31,12 @@ export default function App() {
   const [publicSlug, setPublicSlug] = useState<string>('');
   const [pbCopied, setPbCopied] = useState(false);
   const [pbDownloadSuccess, setPbDownloadSuccess] = useState(false);
+  
+  // Public page states
+  const [publicVideo, setPublicVideo] = useState<VideoRecord | null>(null);
+  const [publicEvent, setPublicEvent] = useState<Event | null>(null);
+  const [loadingPublicVideo, setLoadingPublicVideo] = useState<boolean>(false);
+  const [pbVideoError, setPbVideoError] = useState<string>('');
 
   // ÚNICO estado de eventos — vem SOMENTE do Supabase
   const [activeEvents, setActiveEvents] = useState<Event[]>([]);
@@ -67,6 +74,109 @@ export default function App() {
       .finally(() => setLoadingEvents(false));
   }, []);
 
+  // Carrega vídeo e evento público do Supabase se o slug do participante estiver presente
+  useEffect(() => {
+    if (!publicSlug || viewMode !== 'public_video') return;
+
+    let isMounted = true;
+
+    const loadPublicData = async () => {
+      setLoadingPublicVideo(true);
+      try {
+        console.log('[App] Carregando vídeo público por slug:', publicSlug);
+
+        // 1. Procurar primeiro localmente
+        const localVideo = SpinDb.getVideoBySlug(publicSlug);
+        let videoData: VideoRecord | null = localVideo || null;
+
+        if (!videoData) {
+          // 2. Se não estiver no cache local, buscar no Supabase
+          const { data: dbVideo, error: vidErr } = await supabase
+            .from('videos')
+            .select('*')
+            .eq('public_slug', publicSlug)
+            .maybeSingle();
+
+          if (vidErr) throw vidErr;
+
+          if (dbVideo) {
+            videoData = {
+              id: dbVideo.id,
+              slug: dbVideo.public_slug || publicSlug,
+              eventId: dbVideo.event_id,
+              url: dbVideo.processed_video_url || '',
+              thumbnailUrl: '',
+              duration: dbVideo.duration_seconds || 10,
+              status: dbVideo.status as VideoStatus,
+              viewsCount: dbVideo.views_count || 0,
+              downloadsCount: dbVideo.downloads_count || 0,
+              sharesCount: dbVideo.shares_count || 0,
+              createdAt: dbVideo.created_at || new Date().toISOString(),
+            };
+            // Salvar no banco local para futuros acessos rápidos
+            SpinDb.saveVideo(videoData);
+          }
+        }
+
+        if (videoData && isMounted) {
+          setPublicVideo(videoData);
+
+          // Buscar dados do evento correspondente
+          const localEvent = SpinDb.getEvents().find(e => e.id === videoData?.eventId);
+          if (localEvent) {
+            setPublicEvent(localEvent);
+          } else {
+            const { data: dbEvent, error: evtErr } = await supabase
+              .from('events')
+              .select('*')
+              .eq('id', videoData.eventId)
+              .maybeSingle();
+
+            if (!evtErr && dbEvent && isMounted) {
+              const mappedEvent: Event = {
+                id: dbEvent.id,
+                name: dbEvent.name,
+                description: dbEvent.description || '',
+                date: dbEvent.event_date || '',
+                time: dbEvent.event_time || '',
+                coverUrl: dbEvent.cover_image_url || undefined,
+                status: dbEvent.status,
+                category: dbEvent.category || 'Ativação',
+                frameId: dbEvent.frame_id || '',
+                musicId: dbEvent.music_id || undefined,
+                sponsorIds: [],
+                sponsorsConfig: {},
+                videoDuration: dbEvent.video_duration_seconds || 10,
+                effectPresetId: 'eff_01',
+                themeColor: dbEvent.theme_color || '#6366f1',
+                enableTotemMode: dbEvent.totem_mode_enabled !== false,
+                enableLeadCapture: dbEvent.lead_capture_config?.enabled || false,
+                requiredLeadFields: dbEvent.lead_capture_config?.fields || { name: true, phone: true, city: false, email: false, instagram: false, company: false },
+                lgpdConsentText: dbEvent.lead_capture_config?.lgpd_text || 'Autorizo a captação dos meus dados.',
+                createdAt: dbEvent.created_at || new Date().toISOString(),
+                updatedAt: dbEvent.updated_at || new Date().toISOString(),
+              };
+              SpinDb.saveEvent(mappedEvent);
+              setPublicEvent(mappedEvent);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[App] Erro ao carregar dados do portal do participante:', err);
+      } finally {
+        if (isMounted) {
+          setLoadingPublicVideo(false);
+        }
+      }
+    };
+
+    loadPublicData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [publicSlug, viewMode]);
+
   const handleSelectEvent = (event: Event) => {
     setSelectedEvent(event);
     setActiveLead(null);
@@ -95,19 +205,47 @@ export default function App() {
     SpinDb.registerDownload(vid.id);
     setPbDownloadSuccess(true);
     setTimeout(() => setPbDownloadSuccess(false), 3000);
+
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    if (isMobile) {
+      console.log('[Download] Mobile device detected, choosing native direct stream/download');
+      
+      const link = document.createElement('a');
+      link.href = vid.url;
+      link.target = '_blank';
+      link.download = `Real360_${vid.slug}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return;
+    }
+
     try {
-      const response = await fetch(vid.url);
+      // Abort controller to prevent hung fetches on desktop
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+      const response = await fetch(vid.url, { signal: controller.signal });
+      clearTimeout(timeoutId);
+
       const blob = await response.blob();
       const blobUrl = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = blobUrl;
       link.download = `Real360_${vid.slug}.mp4`;
-      document.body.appendChild(link); link.click(); document.body.removeChild(link);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
       setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-    } catch {
+    } catch (e) {
+      console.warn('[Download] Fetch download failed or timed out, falling back to direct open:', e);
       const link = document.createElement('a');
-      link.href = vid.url; link.target = '_blank'; link.download = `Real360_${vid.slug}.mp4`;
-      document.body.appendChild(link); link.click(); document.body.removeChild(link);
+      link.href = vid.url;
+      link.target = '_blank';
+      link.download = `Real360_${vid.slug}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     }
   };
 
@@ -299,32 +437,89 @@ export default function App() {
         {/* PÁGINA DE DOWNLOAD */}
         {viewMode === 'public_video' && (
           <div className="max-w-sm mx-auto space-y-4 py-4">
-            {(() => {
-              const currentVideo = SpinDb.getVideoBySlug(publicSlug) || allLocalVideos[0];
+            {loadingPublicVideo ? (
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-12 text-center">
+                <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                <p className="text-slate-400 text-xs font-mono">Carregando portal do participante...</p>
+              </div>
+            ) : (() => {
+              const currentVideo = publicVideo || SpinDb.getVideoBySlug(publicSlug) || allLocalVideos[0];
+              const currentEvent = publicEvent || (currentVideo ? SpinDb.getEvents().find(e => e.id === currentVideo.eventId) : null);
+
               if (!currentVideo) return (
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 text-center text-xs font-mono text-slate-500">
-                  Nenhum vídeo encontrado. Realize uma gravação primeiro.
+                  Nenhum vídeo encontrado. Realize uma gravação no totem primeiro.
                 </div>
               );
+
               const shareUrl = `${window.location.origin}?v=${currentVideo.slug}`;
               const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(shareUrl)}&bgcolor=0f172a&color=ffffff&margin=12`;
+
               return (
                 <div className="space-y-4">
                   <div className="text-center space-y-1">
                     <span className="text-[10px] font-mono bg-emerald-950/80 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-full uppercase font-bold">✓ Vídeo Verificado (LGPD)</span>
                     <h3 className="text-xl font-display font-extrabold text-white pt-1">Portal do Participante</h3>
+                    {currentEvent && (
+                      <p className="text-xs text-slate-400 font-mono">{currentEvent.name}</p>
+                    )}
                   </div>
-                  <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 flex flex-col items-center gap-3">
-                    <p className="text-xs font-bold text-white">Aponte a câmera para baixar</p>
-                    <img src={qrUrl} alt="QR Code" className="w-52 h-52 rounded-2xl border-2 border-indigo-500/30" />
-                    <p className="text-[10px] text-slate-500 font-mono text-center break-all px-2">{shareUrl}</p>
+
+                  {/* Video Playback Preview with live tracking logs & Safari fallback warnings */}
+                  <div className="rounded-3xl overflow-hidden bg-black aspect-[9/16] max-h-80 relative shadow-2xl mx-auto w-full border border-slate-800">
+                    <video
+                      src={currentVideo.url}
+                      autoPlay loop muted playsInline
+                      controls
+                      className="w-full h-full object-cover"
+                      onLoadedMetadata={(e) => {
+                        const vidEl = e.currentTarget;
+                        const duration = vidEl.duration;
+                        const ext = currentVideo.url.split('.').pop()?.split('?')[0] || 'webm';
+                        const contentType = ext === 'webm' ? 'video/webm' : 'video/mp4';
+
+                        console.log('[LOG] VIDEO_URL', currentVideo.url);
+                        console.log('[LOG] VIDEO_CONTENT_TYPE', contentType);
+                        console.log('[LOG] VIDEO_DURATION', duration);
+                      }}
+                      onCanPlay={() => {
+                        console.log('[LOG] VIDEO_CANPLAY_EVENT', currentVideo.id);
+                      }}
+                      onError={(e) => {
+                        const err = (e.currentTarget as HTMLVideoElement).error;
+                        console.error('[LOG] VIDEO_ERROR_EVENT', {
+                          code: err?.code,
+                          message: err?.message || 'Media source error'
+                        });
+                        setPbVideoError('Formato de vídeo não suportado para visualização direta no seu navegador.');
+                      }}
+                      onStalled={() => {
+                        console.warn('[LOG] VIDEO_STALLED_EVENT', currentVideo.id);
+                      }}
+                    />
+                    <div className="absolute top-3 left-3 bg-indigo-600/90 backdrop-blur text-white text-[9px] font-bold font-mono px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+                      Preview
+                    </div>
                   </div>
+
+                  {pbVideoError && (
+                    <div className="bg-amber-950/60 border border-amber-500/20 text-amber-300 text-[10px] p-2.5 rounded-2xl text-center leading-relaxed">
+                      ⚠️ O formato WebM gravado de forma ágil no totem não é reproduzido nativamente pelo Safari iOS. Você ainda pode clicar em <strong>"Baixar Vídeo (MP4)"</strong> abaixo para salvá-lo e assisti-lo em sua galeria!
+                    </div>
+                  )}
+
+                  <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 flex flex-col items-center gap-2">
+                    <p className="text-[11px] font-bold text-white uppercase tracking-wider font-mono">Compartilhar via QR Code</p>
+                    <img src={qrUrl} alt="QR Code" className="w-40 h-40 rounded-2xl border border-indigo-500/20" />
+                    <p className="text-[9px] text-slate-500 font-mono text-center break-all px-2 md:max-w-[280px]">{shareUrl}</p>
+                  </div>
+
                   <div className="space-y-2.5">
                     <button onClick={() => handlePublicDownload(currentVideo)}
                       className="w-full py-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-90 rounded-2xl text-sm font-bold text-white uppercase flex items-center justify-center gap-2 shadow-lg cursor-pointer">
                       <Download className="w-4 h-4" /> Baixar Vídeo (MP4)
                     </button>
-                    {pbDownloadSuccess && <p className="text-center text-[10px] text-emerald-400 font-bold font-mono">✓ Download iniciado!</p>}
+                    {pbDownloadSuccess && <p className="text-center text-[10px] text-emerald-400 font-bold font-mono">✓ Download iniciado com sucesso!</p>}
                     <button onClick={() => handlePublicShare(currentVideo, 'whatsapp')}
                       className="w-full py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm flex items-center justify-center gap-2 cursor-pointer">
                       <MessageCircle className="w-4 h-4" /> Enviar pelo WhatsApp

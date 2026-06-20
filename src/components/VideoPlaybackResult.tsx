@@ -192,6 +192,29 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Pro
           src={localVideo.url}
           autoPlay loop muted playsInline
           className="w-full h-full object-cover"
+          onLoadedMetadata={(e) => {
+            const vidEl = e.currentTarget;
+            const duration = vidEl.duration;
+            const ext = localVideo.url.split('.').pop()?.split('?')[0] || 'webm';
+            const contentType = ext === 'webm' ? 'video/webm' : 'video/mp4';
+
+            console.log('[LOG] VIDEO_URL', localVideo.url);
+            console.log('[LOG] VIDEO_CONTENT_TYPE', contentType);
+            console.log('[LOG] VIDEO_DURATION', duration);
+          }}
+          onCanPlay={() => {
+            console.log('[LOG] VIDEO_CANPLAY_EVENT', localVideo.id);
+          }}
+          onError={(e) => {
+            const err = (e.currentTarget as HTMLVideoElement).error;
+            console.error('[LOG] VIDEO_ERROR_EVENT', {
+              code: err?.code,
+              message: err?.message || 'Media source error'
+            });
+          }}
+          onStalled={() => {
+            console.warn('[LOG] VIDEO_STALLED_EVENT', localVideo.id);
+          }}
         />
         <div className="absolute top-3 left-3 bg-emerald-600/90 backdrop-blur text-white text-[10px] font-bold font-mono px-3 py-1 rounded-full">
           ✓ GRAVADO
