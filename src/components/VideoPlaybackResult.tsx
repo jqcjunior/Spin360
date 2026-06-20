@@ -138,59 +138,76 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Pro
     const t0 = performance.now();
     console.log('[LOG] SHARE_START', localVideo.id);
 
-    // Timeout de 10s para a requisição de fetch / blob do vídeo
+    // Timeout de 30s para a requisição de fetch / blob do vídeo
     const controller = new AbortController();
     const fetchTimeoutId = setTimeout(() => {
       console.warn('[Share] Fetch timed out. Aborting fetch.');
       controller.abort();
-    }, 10000);
+    }, 30000);
 
     let blob: Blob | null = null;
 
     try {
+      const isIOS =
+        /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+      if (isIOS) {
+        console.log('[LOG] IOS_DIRECT_OPEN');
+        console.log('[LOG] IOS_FILE_URL', localVideo.url);
+        console.log('[LOG] IOS_FILE_EXTENSION', localVideo.url.split('.').pop());
+
+        window.open(localVideo.url, '_blank');
+        setSharing(false);
+        return;
+      }
+
       console.log('[LOG] FETCH_START', localVideo.url);
-      const fetchStart = performance.now();
-      
-      const response = await fetch(localVideo.url, { signal: controller.signal });
-      clearTimeout(fetchTimeoutId);
 
-      if (!response.ok) throw new Error(`HTTP ${response.status}: Falha ao baixar o arquivo de vídeo`);
-      
-      const blobStart = performance.now();
+      const response = await fetch(localVideo.url, {
+        signal: controller.signal
+      });
+
+      if (!response.ok)
+        throw new Error(`HTTP ${response.status}`);
+
       blob = await response.blob();
-      const now = performance.now();
 
-      console.log('[LOG] FETCH_FINISHED', localVideo.url, `took ${(now - fetchStart).toFixed(1)}ms (blob chunk read in ${(now - blobStart).toFixed(1)}ms)`);
-      console.log('[LOG] BLOB_SIZE', blob.size, 'bytes');
+      const blobMime =
+        blob.type ||
+        (localVideo.url.includes('.webm')
+          ? 'video/webm'
+          : 'video/mp4');
 
-      // Detectar se o arquivo original é webm e mapear corretamente
-      const blobMime = blob.type || (localVideo.url.includes('.webm') ? 'video/webm' : 'video/mp4');
-      const ext = blobMime.includes('webm') ? 'webm' : 'mp4';
-      
-      const file = new File([blob], `Real360_${localVideo.slug}.${ext}`, { type: blobMime });
-      console.log('[LOG] FILE_TYPE', { blobType: blob.type, fileType: file.type, fileName: file.name });
+      const ext =
+        blobMime.includes('webm')
+          ? 'webm'
+          : 'mp4';
 
-      // iOS/Android: usa gaveta nativa com o arquivo
-      // → usuário escolhe: Fotos, WhatsApp, AirDrop, etc.
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        console.log('[LOG] SHARE_OPENED', localVideo.id);
-        
-        const sharePromise = navigator.share({
+      const file = new File(
+        [blob],
+        `Real360_${localVideo.slug}.${ext}`,
+        {
+          type: blobMime
+        }
+      );
+
+      if (
+        navigator.canShare &&
+        navigator.canShare({ files: [file] })
+      ) {
+        await navigator.share({
           title: `Meu vídeo no ${event.name}`,
           text: 'Gravei esse vídeo na ativação Real 360°!',
-          files: [file],
+          files: [file]
         });
 
-        // Timeout fallback de 4s para evitar travamento infinito no Safari se o navigator.share ficar pendente
-        const shareTimeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('ShareTimeout')), 4000)
-        );
-
-        await Promise.race([sharePromise, shareTimeoutPromise]);
-        console.log('[LOG] SHARE_FINISHED', localVideo.id);
-        
         setShared(true);
-        setTimeout(() => setShared(false), 3000);
+
+        setTimeout(() => {
+          setShared(false);
+        }, 3000);
+
         return;
       }
 
@@ -267,6 +284,9 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Pro
             console.log('[LOG] VIDEO_URL', localVideo.url);
             console.log('[LOG] VIDEO_CONTENT_TYPE', contentType);
             console.log('[LOG] VIDEO_DURATION', duration);
+
+            console.log('[LOG] STORAGE_VIDEO_FORMAT', ext);
+            console.log('[LOG] STORAGE_CONTENT_TYPE', contentType);
 
             console.log('[LOG] TOTEM_VIDEO_URL', localVideo.url);
             console.log('[LOG] TOTEM_VIDEO_METADATA', {
