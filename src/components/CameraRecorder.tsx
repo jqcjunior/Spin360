@@ -323,7 +323,8 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
 
       if (mixer) {
         mixer.createMixer();
-        mixer.connectMicrophone(stream);
+        
+        // Mantido como você ajustou: a música no elemento HTML.
         if (audioElRef.current) {
           mixer.connectMusic(audioElRef.current);
         }
@@ -332,10 +333,22 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
 
       const videoTracks = cs && cs.getVideoTracks().length > 0 ? cs.getVideoTracks() : stream.getVideoTracks();
 
-      // Monta o stream unificado com o áudio já mixado
+      // ==============================================================
+      // SOLUÇÃO PARA O IOS: FORÇAR CAPTURA DO ÁUDIO FÍSICO
+      // ==============================================================
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+                   (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+      // O Safari buga com mixedAudioTracks e entrega um vídeo mudo.
+      // Se for iOS, pegamos as trilhas do microfone nativo (stream.getAudioTracks()),
+      // que vai escutar a música que o próprio celular está tocando no alto-falante.
+      const rawAudioTracks = stream.getAudioTracks();
+      const finalAudioTracks = (isIOS && rawAudioTracks.length > 0) ? rawAudioTracks : mixedAudioTracks;
+
+      // Monta o stream unificado com o áudio que o iOS consegue gravar
       recordStream = new MediaStream([
         ...videoTracks,
-        ...mixedAudioTracks
+        ...finalAudioTracks
       ]);
 
     } catch (e) {
