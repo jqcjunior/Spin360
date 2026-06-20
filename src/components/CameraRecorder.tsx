@@ -235,28 +235,42 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
     try {
       const cs = (canvas as any).captureStream(30) as MediaStream;
       
-      // 1. Captura o áudio da música do evento
-      let musicTracks: MediaStreamTrack[] = [];
+      // Captura o áudio (com suporte especial para iPhone/Safari)
+      let audioStream: MediaStream | null = null;
       if (audioElRef.current) {
         const audioEl = audioElRef.current as any;
-        const audioStream = audioEl.captureStream 
-          ? audioEl.captureStream() 
-          : audioEl.mozCaptureStream ? audioEl.mozCaptureStream() : null;
-          
-        if (audioStream) {
-          musicTracks = audioStream.getAudioTracks();
+        
+        if (audioEl.captureStream) {
+          audioStream = audioEl.captureStream(); // Chrome/Android
+        } else if (audioEl.mozCaptureStream) {
+          audioStream = audioEl.mozCaptureStream(); // Firefox
+        } else {
+          // Fallback obrigatório para iPhone (iOS não tem captureStream em mídia)
+          const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+          if (AudioCtx && !audioEl._hasAudioNode) {
+            const actx = new AudioCtx();
+            const dest = actx.createMediaStreamDestination();
+            const source = actx.createMediaElementSource(audioEl);
+            source.connect(dest);
+            source.connect(actx.destination); // Conecta à saída para continuar tocando
+            audioEl._hasAudioNode = true;
+            audioEl._audioStream = dest.stream;
+          }
+          audioStream = audioEl._audioStream || null;
         }
       }
 
+      const musicTracks = audioStream ? audioStream.getAudioTracks() : [];
+
       if (cs.getVideoTracks().length > 0) {
-        // 2. Cria o stream final: Vídeo com Moldura + Áudio do Evento (Ignora o Microfone)
+        // Junta o vídeo da moldura com o áudio processado
         recordStream = new MediaStream([
           cs.getVideoTracks()[0],
-          ...musicTracks 
+          ...musicTracks
         ]);
       }
     } catch (e) {
-      console.error('Erro ao capturar stream com moldura e música:', e);
+      console.error('Erro ao capturar stream no iOS. Usando câmera pura:', e);
     }
 
     const mimeType = ['video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']
@@ -306,8 +320,8 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
     <div className="fixed inset-0 z-[200] bg-black">
       <audio ref={audioElRef} playsInline crossOrigin="anonymous" />
 
-      {/* Canvas OCULTO — só para gravação */}
-      <canvas ref={canvasRef} style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }} />
+      {/* Canvas OCULTO (Fora da tela para o iOS não congelar a renderização) */}
+      <canvas ref={canvasRef} style={{ position: 'absolute', left: '-9999px' }} />
 
       {/* PREVIEW: vídeo com object-cover (correto em todos os dispositivos) */}
       <video
