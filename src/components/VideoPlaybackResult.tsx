@@ -135,21 +135,60 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Pro
     setSharing(true);
     setError('');
 
+    const t0 = performance.now();
+    console.log('[LOG] SHARE_START', localVideo.id);
+
+    // Timeout de 10s para a requisição de fetch / blob do vídeo
+    const controller = new AbortController();
+    const fetchTimeoutId = setTimeout(() => {
+      console.warn('[Share] Fetch timed out. Aborting fetch.');
+      controller.abort();
+    }, 10000);
+
+    let blob: Blob | null = null;
+
     try {
-      // Busca o vídeo como Blob
-      const response = await fetch(localVideo.url);
-      if (!response.ok) throw new Error('Erro ao carregar vídeo');
-      const blob = await response.blob();
-      const file = new File([blob], `Real360_${localVideo.slug}.mp4`, { type: 'video/mp4' });
+      console.log('[LOG] FETCH_START', localVideo.url);
+      const fetchStart = performance.now();
+      
+      const response = await fetch(localVideo.url, { signal: controller.signal });
+      clearTimeout(fetchTimeoutId);
+
+      if (!response.ok) throw new Error(`HTTP ${response.status}: Falha ao baixar o arquivo de vídeo`);
+      
+      const blobStart = performance.now();
+      blob = await response.blob();
+      const now = performance.now();
+
+      console.log('[LOG] FETCH_FINISHED', localVideo.url, `took ${(now - fetchStart).toFixed(1)}ms (blob chunk read in ${(now - blobStart).toFixed(1)}ms)`);
+      console.log('[LOG] BLOB_SIZE', blob.size, 'bytes');
+
+      // Detectar se o arquivo original é webm e mapear corretamente
+      const blobMime = blob.type || (localVideo.url.includes('.webm') ? 'video/webm' : 'video/mp4');
+      const ext = blobMime.includes('webm') ? 'webm' : 'mp4';
+      
+      const file = new File([blob], `Real360_${localVideo.slug}.${ext}`, { type: blobMime });
+      console.log('[LOG] FILE_TYPE', { blobType: blob.type, fileType: file.type, fileName: file.name });
 
       // iOS/Android: usa gaveta nativa com o arquivo
       // → usuário escolhe: Fotos, WhatsApp, AirDrop, etc.
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({
+        console.log('[LOG] SHARE_OPENED', localVideo.id);
+        
+        const sharePromise = navigator.share({
           title: `Meu vídeo no ${event.name}`,
           text: 'Gravei esse vídeo na ativação Real 360°!',
           files: [file],
         });
+
+        // Timeout fallback de 4s para evitar travamento infinito no Safari se o navigator.share ficar pendente
+        const shareTimeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('ShareTimeout')), 4000)
+        );
+
+        await Promise.race([sharePromise, shareTimeoutPromise]);
+        console.log('[LOG] SHARE_FINISHED', localVideo.id);
+        
         setShared(true);
         setTimeout(() => setShared(false), 3000);
         return;
@@ -159,7 +198,7 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Pro
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = blobUrl;
-      a.download = `Real360_${localVideo.slug}.mp4`;
+      a.download = `Real360_${localVideo.slug}.${ext}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -168,11 +207,38 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Pro
       setTimeout(() => setShared(false), 3000);
 
     } catch (err: any) {
-      if (err?.name === 'AbortError') {
-        // Usuário cancelou a gaveta — não é erro
+      clearTimeout(fetchTimeoutId);
+      console.error('[LOG] SHARE_ERROR', err?.message || err);
+      console.warn('[Share] Error or timeout during sharing/saving:', err);
+
+      // Tratamento de fallback se o navigator.share falhou ou deu timeout
+      if (err?.name === 'AbortError' || err?.message === 'ShareTimeout' || err?.name === 'NotAllowedError') {
+        // Tenta fazer o download direto usando o blob que já foi carregado para não fazer fetch redundante
+        try {
+          const downloadBlob = blob || (await fetch(localVideo.url).then(r => r.blob()));
+          const blobMime = downloadBlob.type || (localVideo.url.includes('.webm') ? 'video/webm' : 'video/mp4');
+          const ext = blobMime.includes('webm') ? 'webm' : 'mp4';
+          const blobUrl = URL.createObjectURL(downloadBlob);
+          const link = document.createElement('a');
+          link.href = blobUrl;
+          link.download = `Real360_${localVideo.slug}.${ext}`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+          setShared(true);
+          setTimeout(() => setShared(false), 3000);
+        } catch (downErr) {
+          if (isSupabaseUrl) {
+            window.open(localVideo.url, '_blank');
+          } else {
+            setError('Falha ao baixar vídeo diretamente. Reabra a página ou tente novamente.');
+          }
+        }
         return;
       }
-      // Se fetch falhou (blob URL expirou), tenta abrir URL diretamente
+
+      // Se o fetch do próprio arquivo falhou (ex: CORS / sem rede)
       if (isSupabaseUrl) {
         window.open(localVideo.url, '_blank');
       } else {
@@ -201,13 +267,26 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Pro
             console.log('[LOG] VIDEO_URL', localVideo.url);
             console.log('[LOG] VIDEO_CONTENT_TYPE', contentType);
             console.log('[LOG] VIDEO_DURATION', duration);
+
+            console.log('[LOG] TOTEM_VIDEO_URL', localVideo.url);
+            console.log('[LOG] TOTEM_VIDEO_METADATA', {
+              duration: duration,
+              videoWidth: vidEl.videoWidth,
+              videoHeight: vidEl.videoHeight
+            });
           }}
           onCanPlay={() => {
             console.log('[LOG] VIDEO_CANPLAY_EVENT', localVideo.id);
+            console.log('[LOG] TOTEM_VIDEO_CANPLAY', localVideo.id);
+            console.log('[LOG] TOTEM_VIDEO_READY', localVideo.id);
           }}
           onError={(e) => {
             const err = (e.currentTarget as HTMLVideoElement).error;
             console.error('[LOG] VIDEO_ERROR_EVENT', {
+              code: err?.code,
+              message: err?.message || 'Media source error'
+            });
+            console.error('[LOG] TOTEM_VIDEO_ERROR', {
               code: err?.code,
               message: err?.message || 'Media source error'
             });
