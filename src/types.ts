@@ -132,7 +132,7 @@ export interface VideoLead {
 }
 
 // Vídeos gravados e renderizados
-export type VideoStatus = 'processing' | 'completed' | 'failed';
+export type VideoStatus = 'processing' | 'completed' | 'failed' | 'pending';
 
 export interface VideoRecord {
   id: string;

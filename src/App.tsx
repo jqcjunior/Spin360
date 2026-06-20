@@ -13,11 +13,15 @@ import { Event, VideoRecord, VideoLead } from './types';
 import { SpinDb } from './db';
 import { getActiveEvents } from './lib/api';
 import AdminDashboard from './components/AdminDashboard';
+import AuthGuard from './components/AuthGuard';
 import LeadCaptureModal from './components/LeadCaptureModal';
 import CameraRecorder from './components/CameraRecorder';
 import VideoPlaybackResult from './components/VideoPlaybackResult';
 
+import useOfflineSync from './hooks/useOfflineSync';
+
 export default function App() {
+  useOfflineSync();
   const [viewMode, setViewMode] = useState<'totem' | 'admin' | 'public_video'>('totem');
   const [totemState, setTotemState] = useState<'selection' | 'lead' | 'recorder' | 'result'>('selection');
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
@@ -274,12 +278,14 @@ export default function App() {
           </div>
         )}
 
-        {/* ADMIN */}
+        {/* ADMIN — protegido por login */}
         {viewMode === 'admin' && (
-          <AdminDashboard onSelectEventForCapture={(evt) => {
-            setSelectedEvent(evt); setViewMode('totem');
-            setTotemState(evt.enableLeadCapture ? 'lead' : 'recorder');
-          }} />
+          <AuthGuard>
+            <AdminDashboard onSelectEventForCapture={(evt) => {
+              setSelectedEvent(evt); setViewMode('totem');
+              setTotemState(evt.enableLeadCapture ? 'lead' : 'recorder');
+            }} />
+          </AuthGuard>
         )}
 
         {/* PÁGINA DE DOWNLOAD */}
