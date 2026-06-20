@@ -1252,9 +1252,38 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Imagem de Capa (URL)</label>
-                    <input type="text" placeholder="https://..." value={evtCover} onChange={e => setEvtCover(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                    <label className="text-[10px] font-mono text-slate-400 font-bold uppercase block">Imagem de Capa</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="URL da imagem ou faça upload →"
+                        value={evtCover}
+                        onChange={e => setEvtCover(e.target.value)}
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500"
+                      />
+                      <label className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl cursor-pointer flex items-center gap-1 whitespace-nowrap transition-colors">
+                        📁 Upload
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            try {
+                              const { uploadFile } = await import('../lib/storage');
+                              const url = await uploadFile('covers', file);
+                              setEvtCover(url);
+                            } catch (err: any) {
+                              alert('Erro no upload: ' + err.message);
+                            }
+                          }}
+                        />
+                      </label>
+                    </div>
+                    {evtCover && (
+                      <img src={evtCover} alt="preview" className="w-full h-24 object-cover rounded-xl mt-1 border border-slate-800" />
+                    )}
                   </div>
 
                   <div className="space-y-1">
