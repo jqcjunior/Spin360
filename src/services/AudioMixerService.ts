@@ -4,7 +4,13 @@ export class AudioMixerService {
   private audioCtx: AudioContext | null = null;
   private destination: MediaStreamAudioDestinationNode | null = null;
   private micSource: MediaStreamAudioSourceNode | null = null;
+  
+  // Guardamos a origem antiga para o fallback de segurança
   private musicSource: MediaElementAudioSourceNode | null = null;
+  
+  // Novas propriedades exclusivas para blindar o áudio no iOS (Buffer de Memória)
+  private bufferSource: AudioBufferSourceNode | null = null;
+  private audioBuffer: AudioBuffer | null = null;
 
   createMixer(): AudioContext {
     try {
@@ -51,9 +57,69 @@ export class AudioMixerService {
     }
   }
 
+  // AJUSTE: Transformar a tag <audio> em um Buffer de Memória puro para o Safari
   connectMusic(audioElement: HTMLAudioElement) {
     if (!this.audioCtx || !this.destination) return;
+    
+    // Limpa execuções anteriores
+    if (this.bufferSource) {
+      try { this.bufferSource.disconnect(); } catch (e) {}
+      this.bufferSource = null;
+    }
+
     try {
+      // 1. Mutamos o elemento original para não dar eco. Quem vai tocar a música agora é o Buffer.
+      audioElement.muted = true;
+
+      // 2. Criamos o carregador em memória
+      const loadBuffer = async () => {
+        if (!this.audioCtx || !this.destination) return;
+        
+        try {
+          // Pega o arquivo que já está em cache local (blob)
+          const response = await fetch(audioElement.src);
+          const arrayBuffer = await response.arrayBuffer();
+          
+          // Decodifica o áudio blindado (Isso ignora os bloqueios do iOS)
+          this.audioBuffer = await this.audioCtx.decodeAudioData(arrayBuffer);
+          
+          this.bufferSource = this.audioCtx.createBufferSource();
+          this.bufferSource.buffer = this.audioBuffer;
+          this.bufferSource.loop = audioElement.loop;
+          
+          // Conecta na gravação (destination) E nas caixas de som do celular (audioCtx.destination)
+          this.bufferSource.connect(this.destination);
+          this.bufferSource.connect(this.audioCtx.destination);
+          
+          this.bufferSource.start(0);
+        } catch (err) {
+          LoggerService.error({
+            module: 'AudioMixerService',
+            action: 'connectMusic_bufferDecode',
+            error: err,
+          });
+          
+          // Se o plano A falhar (ex: navegador muito antigo), volta para o plano B original
+          this.fallbackConnectMusic(audioElement);
+        }
+      };
+
+      loadBuffer();
+    } catch (error) {
+      LoggerService.error({
+        module: 'AudioMixerService',
+        action: 'connectMusic_general',
+        error,
+      });
+      this.fallbackConnectMusic(audioElement);
+    }
+  }
+
+  // Mantido intacto como plano B (Fallback)
+  private fallbackConnectMusic(audioElement: HTMLAudioElement) {
+    if (!this.audioCtx || !this.destination) return;
+    try {
+      audioElement.muted = false; 
       const el = audioElement as any;
       if (!el._sourceNode) {
         try {
@@ -75,11 +141,11 @@ export class AudioMixerService {
       } catch (e) {}
 
       this.musicSource?.connect(this.destination);
-      this.musicSource?.connect(this.audioCtx.destination); // Speaker output
+      this.musicSource?.connect(this.audioCtx.destination);
     } catch (error) {
       LoggerService.error({
         module: 'AudioMixerService',
-        action: 'connectMusic_general',
+        action: 'fallbackConnectMusic',
         error,
       });
     }
@@ -113,6 +179,12 @@ export class AudioMixerService {
         try { this.musicSource.disconnect(); } catch (e) {}
         this.musicSource = null;
       }
+      if (this.bufferSource) {
+        try { this.bufferSource.disconnect(); } catch (e) {}
+        this.bufferSource = null;
+      }
+      this.audioBuffer = null;
+
       if (this.audioCtx) {
         try {
           await this.audioCtx.close();
