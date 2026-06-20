@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { RotateCcw, QrCode, Share2 } from 'lucide-react';
 import { VideoRecord, Event } from '../types';
+import { supabase } from '../lib/supabase';
+import { SpinDb } from '../db';
 
 interface Props {
   video: VideoRecord;
@@ -14,13 +16,118 @@ interface Props {
 }
 
 export default function VideoPlaybackResult({ video, event, onRecordAgain }: Props) {
+  const [localVideo, setLocalVideo] = useState<VideoRecord>(video);
   const [sharing, setSharing]   = useState(false);
   const [shared, setShared]     = useState(false);
   const [error, setError]       = useState('');
 
-  const isSupabaseUrl = video.url.startsWith('https://');
-  const shareUrl = `${window.location.origin}?v=${video.slug}`;
+  const isSupabaseUrl = localVideo.url.startsWith('https://');
+  const shareUrl = `${window.location.origin}?v=${localVideo.slug}`;
   const qrUrl    = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(shareUrl)}&bgcolor=0f172a&color=ffffff&margin=10`;
+
+  // Update localVideo state if video prop changes
+  useEffect(() => {
+    setLocalVideo(video);
+  }, [video]);
+
+  // Log VIDEO_CREATED when video is first received
+  useEffect(() => {
+    console.log('[LOG] VIDEO_CREATED', {
+      id: video.id,
+      slug: video.slug,
+      status: video.status,
+      url: video.url
+    });
+  }, [video.id]);
+
+  // Log QR_READY when permanent URL is ready
+  useEffect(() => {
+    if (isSupabaseUrl) {
+      console.log('[LOG] QR_READY', {
+        id: localVideo.id,
+        url: localVideo.url
+      });
+    }
+  }, [isSupabaseUrl, localVideo.id, localVideo.url]);
+
+  // Polling logic for video status sync
+  useEffect(() => {
+    if (localVideo.status === 'completed' && localVideo.url.startsWith('https://')) {
+      return;
+    }
+
+    let intervalId: any = null;
+    let isMounted = true;
+
+    const checkStatus = async () => {
+      try {
+        // 1. Check local SpinDb first (if UploadService already fulfilled it)
+        const localCopy = SpinDb.getVideos().find((x: any) => x.id === video.id);
+        if (localCopy && localCopy.status === 'completed' && localCopy.url.startsWith('https://')) {
+          if (isMounted) {
+            console.log('[LOG] VIDEO_UPLOADED', video.id);
+            console.log('[LOG] VIDEO_COMPLETED', video.id);
+            console.log('[LOG] VIDEO_STATE_UPDATED', {
+              id: video.id,
+              status: 'completed',
+              url: localCopy.url
+            });
+            setLocalVideo(localCopy);
+          }
+          if (intervalId) clearInterval(intervalId);
+          return;
+        }
+
+        // 2. Query Supabase directly
+        const { data, error: queryErr } = await supabase
+          .from('videos')
+          .select('id, processed_video_url, status')
+          .eq('id', video.id)
+          .maybeSingle();
+
+        if (queryErr) {
+          console.warn('[Polling] Error querying Supabase:', queryErr);
+          return;
+        }
+
+        if (data && data.status === 'completed' && data.processed_video_url) {
+          console.log('[LOG] VIDEO_UPLOADED', video.id);
+          console.log('[LOG] VIDEO_COMPLETED', video.id);
+
+          const updated: VideoRecord = {
+            ...localVideo,
+            url: data.processed_video_url,
+            status: 'completed'
+          };
+
+          // Save to local database
+          SpinDb.saveVideo(updated);
+
+          if (isMounted) {
+            console.log('[LOG] VIDEO_STATE_UPDATED', {
+              id: video.id,
+              status: 'completed',
+              url: data.processed_video_url
+            });
+            setLocalVideo(updated);
+          }
+
+          if (intervalId) clearInterval(intervalId);
+        }
+      } catch (err) {
+        console.error('[Polling] Error in video status check:', err);
+      }
+    };
+
+    // Run immediately and start interval
+    checkStatus();
+    intervalId = setInterval(checkStatus, 2000);
+
+    return () => {
+      isMounted = false;
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [video.id, localVideo.status, localVideo.url]);
 
   // ÚNICA função de compartilhamento — funciona no iPhone, Android e Desktop
   const handleShare = async (channel?: string) => {
@@ -30,10 +137,10 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Pro
 
     try {
       // Busca o vídeo como Blob
-      const response = await fetch(video.url);
+      const response = await fetch(localVideo.url);
       if (!response.ok) throw new Error('Erro ao carregar vídeo');
       const blob = await response.blob();
-      const file = new File([blob], `Real360_${video.slug}.mp4`, { type: 'video/mp4' });
+      const file = new File([blob], `Real360_${localVideo.slug}.mp4`, { type: 'video/mp4' });
 
       // iOS/Android: usa gaveta nativa com o arquivo
       // → usuário escolhe: Fotos, WhatsApp, AirDrop, etc.
@@ -52,7 +159,7 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Pro
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = blobUrl;
-      a.download = `Real360_${video.slug}.mp4`;
+      a.download = `Real360_${localVideo.slug}.mp4`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -67,7 +174,7 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Pro
       }
       // Se fetch falhou (blob URL expirou), tenta abrir URL diretamente
       if (isSupabaseUrl) {
-        window.open(video.url, '_blank');
+        window.open(localVideo.url, '_blank');
       } else {
         setError('Vídeo ainda sendo processado. Tente em alguns segundos.');
       }
@@ -82,7 +189,7 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Pro
       {/* Preview do vídeo */}
       <div className="rounded-3xl overflow-hidden bg-black aspect-[9/16] max-h-72 relative shadow-2xl">
         <video
-          src={video.url}
+          src={localVideo.url}
           autoPlay loop muted playsInline
           className="w-full h-full object-cover"
         />
@@ -94,7 +201,7 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Pro
       {/* Info */}
       <div className="text-center space-y-0.5">
         <h3 className="text-white font-bold text-lg leading-tight">{event.name}</h3>
-        <p className="text-slate-500 text-[10px] font-mono">ID: {video.slug}</p>
+        <p className="text-slate-500 text-[10px] font-mono">ID: {localVideo.slug}</p>
       </div>
 
       {/* QR Code — só aparece quando tem URL permanente */}

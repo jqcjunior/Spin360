@@ -275,13 +275,25 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
         payload.created_at = new Date().toISOString();
       }
 
+      // Regra de Negócio: Somente um evento pode ser ativo ao mesmo tempo.
+      // Se este evento estiver sendo salvo como ativo, desativa todos os outros no Supabase e no SpinDb local.
       if (payload.status === 'active') {
-        const { error: pauseError } = await supabase
+        const { error: deacErr } = await supabase
           .from('events')
           .update({ status: 'paused', updated_at: new Date().toISOString() })
           .eq('status', 'active')
           .neq('id', eventId);
-        if (pauseError) throw pauseError;
+
+        if (deacErr) {
+          console.warn('[Admin] Falha ao desativar outros eventos ativos:', deacErr);
+        }
+
+        // Desativa localmente os outros eventos no SpinDb
+        SpinDb.getEvents().forEach((evt) => {
+          if (evt.id !== eventId && evt.status === 'active') {
+            SpinDb.saveEvent({ ...evt, status: 'paused' });
+          }
+        });
       }
 
       const { error } = await supabase.from('events').upsert(payload, { onConflict: 'id' });
@@ -311,11 +323,6 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
         createdAt: !editingEventId ? payload.created_at : (editingEvent?.createdAt || new Date().toISOString()),
         updatedAt: payload.updated_at
       };
-      if (eventData.status === 'active') {
-        SpinDb.getEvents()
-          .filter(other => other.id !== eventId && other.status === 'active')
-          .forEach(other => SpinDb.saveEvent({ ...other, status: 'paused' }));
-      }
       SpinDb.saveEvent(eventData);
 
       setEditingEventId(null);
@@ -424,33 +431,41 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
       return;
     }
 
-    const updatedAt = new Date().toISOString();
-
     try {
+      // Regra de Negócio: Somente um evento pode ser ativo ao mesmo tempo.
       if (nextStatus === 'active') {
-        const { error: pauseError } = await supabase
+        const { error: deacErr } = await supabase
           .from('events')
-          .update({ status: 'paused', updated_at: updatedAt })
+          .update({ status: 'paused', updated_at: new Date().toISOString() })
           .eq('status', 'active')
           .neq('id', event.id);
-        if (pauseError) throw pauseError;
 
-        SpinDb.getEvents()
-          .filter(other => other.id !== event.id && other.status === 'active')
-          .forEach(other => SpinDb.saveEvent({ ...other, status: 'paused' }));
+        if (deacErr) {
+          console.warn('[Admin] Falha ao desativar outros eventos ativos:', deacErr);
+        }
+
+        // Desativa localmente os outros eventos no SpinDb
+        SpinDb.getEvents().forEach((evt) => {
+          if (evt.id !== event.id && evt.status === 'active') {
+            SpinDb.saveEvent({ ...evt, status: 'paused' });
+          }
+        });
       }
 
-      const { error } = await supabase
+      // Persiste o status atualizado no Supabase
+      const { error: updateErr } = await supabase
         .from('events')
-        .update({ status: nextStatus, updated_at: updatedAt })
+        .update({ status: nextStatus, updated_at: new Date().toISOString() })
         .eq('id', event.id);
-      if (error) throw error;
 
-      const updated = { ...event, status: nextStatus, updatedAt };
+      if (updateErr) throw updateErr;
+
+      // Atualiza localmente e recarrega tela
+      const updated = { ...event, status: nextStatus };
       SpinDb.saveEvent(updated);
       triggerReload();
     } catch (err: any) {
-      alert('Erro ao alterar status: ' + (err.message || 'Tente novamente.'));
+      alert('Erro ao sincronizar status com servidor: ' + (err.message || 'Tente novamente.'));
     }
   };
 

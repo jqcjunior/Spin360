@@ -52,8 +52,16 @@ export default function App() {
   useEffect(() => {
     getActiveEvents()
       .then(events => {
-        setActiveEvents(events);
-        console.log(`[App] ${events.length} eventos carregados:`, events.map(e => e.name));
+        // Regra de Negócio: Deve existir apenas 1 evento ativo por vez.
+        // Se houver mais de um marcado como ativo, mantemos apenas o mais recente por data de criação.
+        const sorted = [...events].sort((a, b) => {
+          const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          return timeB - timeA; // decrescente (mais recente primeiro)
+        });
+        const singleActive = sorted.length > 0 ? [sorted[0]] : [];
+        setActiveEvents(singleActive);
+        console.log(`[App] ${singleActive.length} evento ativo selecionado:`, singleActive.map(e => e.name));
       })
       .catch(err => console.error('[App] Erro:', err))
       .finally(() => setLoadingEvents(false));
