@@ -275,6 +275,15 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
         payload.created_at = new Date().toISOString();
       }
 
+      if (payload.status === 'active') {
+        const { error: pauseError } = await supabase
+          .from('events')
+          .update({ status: 'paused', updated_at: new Date().toISOString() })
+          .eq('status', 'active')
+          .neq('id', eventId);
+        if (pauseError) throw pauseError;
+      }
+
       const { error } = await supabase.from('events').upsert(payload, { onConflict: 'id' });
       if (error) throw error;
 
@@ -302,6 +311,11 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
         createdAt: !editingEventId ? payload.created_at : (editingEvent?.createdAt || new Date().toISOString()),
         updatedAt: payload.updated_at
       };
+      if (eventData.status === 'active') {
+        SpinDb.getEvents()
+          .filter(other => other.id !== eventId && other.status === 'active')
+          .forEach(other => SpinDb.saveEvent({ ...other, status: 'paused' }));
+      }
       SpinDb.saveEvent(eventData);
 
       setEditingEventId(null);
@@ -398,7 +412,7 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
   };
 
   // Switch event status helper
-  const toggleStatus = (event: Event) => {
+  const toggleStatus = async (event: Event) => {
     const statuses: EventStatus[] = ['draft', 'active', 'paused', 'completed', 'archived'];
     const currentIdx = statuses.indexOf(event.status);
     const nextIdx = (currentIdx + 1) % statuses.length;
@@ -410,9 +424,34 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
       return;
     }
 
-    const updated = { ...event, status: nextStatus };
-    SpinDb.saveEvent(updated);
-    triggerReload();
+    const updatedAt = new Date().toISOString();
+
+    try {
+      if (nextStatus === 'active') {
+        const { error: pauseError } = await supabase
+          .from('events')
+          .update({ status: 'paused', updated_at: updatedAt })
+          .eq('status', 'active')
+          .neq('id', event.id);
+        if (pauseError) throw pauseError;
+
+        SpinDb.getEvents()
+          .filter(other => other.id !== event.id && other.status === 'active')
+          .forEach(other => SpinDb.saveEvent({ ...other, status: 'paused' }));
+      }
+
+      const { error } = await supabase
+        .from('events')
+        .update({ status: nextStatus, updated_at: updatedAt })
+        .eq('id', event.id);
+      if (error) throw error;
+
+      const updated = { ...event, status: nextStatus, updatedAt };
+      SpinDb.saveEvent(updated);
+      triggerReload();
+    } catch (err: any) {
+      alert('Erro ao alterar status: ' + (err.message || 'Tente novamente.'));
+    }
   };
 
   // Sponsor selection toggles

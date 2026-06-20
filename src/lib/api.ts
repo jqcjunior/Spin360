@@ -9,7 +9,8 @@ export async function getActiveEvents(): Promise<Event[]> {
     .from('events')
     .select('*, frames:frame_id(id,name,image_url,tags), music_tracks:music_id(id,name,file_url,volume,fade_in_seconds,fade_out_seconds,is_loop,start_point_seconds)')
     .eq('status', 'active')
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(1);
 
   if (error || !data) return [];
 
@@ -75,6 +76,14 @@ export async function saveEvent(event: Event): Promise<void> {
   const frameUuid = event.frameId?.length === 36 ? event.frameId : null;
   const musicUuid = event.musicId?.length === 36 ? event.musicId : null;
   const eventId = event.id?.length === 36 ? event.id : undefined;
+
+  if (event.status === 'active' && eventId) {
+    await supabase
+      .from('events')
+      .update({ status: 'paused', updated_at: new Date().toISOString() })
+      .eq('status', 'active')
+      .neq('id', eventId);
+  }
 
   await (supabase.from('events') as any).upsert({
     ...(eventId ? { id: eventId } : {}),
