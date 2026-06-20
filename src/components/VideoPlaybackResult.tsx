@@ -138,64 +138,26 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Pro
     const t0 = performance.now();
     console.log('[LOG] SHARE_START', localVideo.id);
 
-    // Timeout de 30s para a requisição de fetch / blob do vídeo
+    // Timeout de 30s para a requisição
     const controller = new AbortController();
-    const fetchTimeoutId = setTimeout(() => {
-      console.warn('[Share] Fetch timed out. Aborting fetch.');
-      controller.abort();
-    }, 30000);
-
-    let blob: Blob | null = null;
+    const fetchTimeoutId = setTimeout(() => controller.abort(), 30000);
 
     try {
-      const isIOS =
-        /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-
-      if (isIOS) {
-        console.log('[LOG] IOS_DIRECT_OPEN');
-        console.log('[LOG] IOS_FILE_URL', localVideo.url);
-        console.log('[LOG] IOS_FILE_EXTENSION', localVideo.url.split('.').pop());
-
-        window.open(localVideo.url, '_blank');
-        setSharing(false);
-        return;
-      }
-
       console.log('[LOG] FETCH_START', localVideo.url);
 
-      const response = await fetch(localVideo.url, {
-        signal: controller.signal
-      });
+      // Baixa o vídeo recém-processado em memória
+      const response = await fetch(localVideo.url, { signal: controller.signal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-      if (!response.ok)
-        throw new Error(`HTTP ${response.status}`);
+      const blob = await response.blob();
+      const blobMime = blob.type || (localVideo.url.includes('.webm') ? 'video/webm' : 'video/mp4');
+      const ext = blobMime.includes('webm') ? 'webm' : 'mp4';
 
-      blob = await response.blob();
+      // Empacota o blob em um arquivo formal que a Apple aceita
+      const file = new File([blob], `Real360_${localVideo.slug}.${ext}`, { type: blobMime });
 
-      const blobMime =
-        blob.type ||
-        (localVideo.url.includes('.webm')
-          ? 'video/webm'
-          : 'video/mp4');
-
-      const ext =
-        blobMime.includes('webm')
-          ? 'webm'
-          : 'mp4';
-
-      const file = new File(
-        [blob],
-        `Real360_${localVideo.slug}.${ext}`,
-        {
-          type: blobMime
-        }
-      );
-
-      if (
-        navigator.canShare &&
-        navigator.canShare({ files: [file] })
-      ) {
+      // Dispara o compartilhamento nativo (Destrava o Salvar Vídeo no iOS)
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({
           title: `Meu vídeo no ${event.name}`,
           text: 'Gravei esse vídeo na ativação Real 360°!',
@@ -203,15 +165,11 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Pro
         });
 
         setShared(true);
-
-        setTimeout(() => {
-          setShared(false);
-        }, 3000);
-
+        setTimeout(() => setShared(false), 3000);
         return;
       }
 
-      // Desktop: download direto
+      // Desktop / Android Antigo: fallback para download direto
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = blobUrl;
@@ -220,47 +178,16 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Pro
       a.click();
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(blobUrl), 2000);
+      
       setShared(true);
       setTimeout(() => setShared(false), 3000);
 
     } catch (err: any) {
       clearTimeout(fetchTimeoutId);
       console.error('[LOG] SHARE_ERROR', err?.message || err);
-      console.warn('[Share] Error or timeout during sharing/saving:', err);
-
-      // Tratamento de fallback se o navigator.share falhou ou deu timeout
-      if (err?.name === 'AbortError' || err?.message === 'ShareTimeout' || err?.name === 'NotAllowedError') {
-        // Tenta fazer o download direto usando o blob que já foi carregado para não fazer fetch redundante
-        try {
-          const downloadBlob = blob || (await fetch(localVideo.url).then(r => r.blob()));
-          const blobMime = downloadBlob.type || (localVideo.url.includes('.webm') ? 'video/webm' : 'video/mp4');
-          const ext = blobMime.includes('webm') ? 'webm' : 'mp4';
-          const blobUrl = URL.createObjectURL(downloadBlob);
-          const link = document.createElement('a');
-          link.href = blobUrl;
-          link.download = `Real360_${localVideo.slug}.${ext}`;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-          setShared(true);
-          setTimeout(() => setShared(false), 3000);
-        } catch (downErr) {
-          if (isSupabaseUrl) {
-            window.open(localVideo.url, '_blank');
-          } else {
-            setError('Falha ao baixar vídeo diretamente. Reabra a página ou tente novamente.');
-          }
-        }
-        return;
-      }
-
-      // Se o fetch do próprio arquivo falhou (ex: CORS / sem rede)
-      if (isSupabaseUrl) {
-        window.open(localVideo.url, '_blank');
-      } else {
-        setError('Vídeo ainda sendo processado. Tente em alguns segundos.');
-      }
+      
+      // Último recurso: se falhar por falta de rede ou bloqueio extremo, abre em nova aba
+      window.open(localVideo.url, '_blank');
     } finally {
       setSharing(false);
     }
