@@ -4,9 +4,9 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { X, RefreshCw, Camera, AlertTriangle } from 'lucide-react';
+import { X } from 'lucide-react';
 import { Event, VideoLead, VideoRecord } from '../types';
-import { SpinDb, DEMO_FRAMES_SVG } from '../db';
+import { SpinDb } from '../db';
 import { supabase } from '../lib/supabase';
 import { getAsset } from '../lib/cache';
 
@@ -17,14 +17,15 @@ interface Props {
   onCancel: () => void;
 }
 
-type RecState = 'loading' | 'preview' | 'countdown' | 'recording' | 'done';
-
 function uuid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
     const r = Math.random() * 16 | 0;
     return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
   });
 }
+
+const CANVAS_W = 1080;
+const CANVAS_H = 1920;
 
 export default function CameraRecorder({ event, lead, onRecordingComplete, onCancel }: Props) {
   const videoRef    = useRef<HTMLVideoElement>(null);
@@ -36,221 +37,144 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
   const streamRef   = useRef<MediaStream | null>(null);
   const chunksRef   = useRef<Blob[]>([]);
   const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
+  const safetyRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [recState, setRecState]   = useState<RecState>('loading');
+  const duration = event.videoDuration || 10;
+
+  const [phase, setPhase]         = useState<'loading' | 'ready' | 'countdown' | 'recording' | 'saving'>('loading');
   const [countdown, setCountdown] = useState(3);
-  const [timeLeft, setTimeLeft]   = useState(event.videoDuration);
-  const [error, setError]         = useState<string | null>(null);
-  const [uploadMsg, setUploadMsg] = useState('');
+  const [timeLeft, setTimeLeft]   = useState(duration);
+  const [camError, setCamError]   = useState(false);
 
-  // ─── Carrega moldura e música ───────────────────────────────────────────────
+  const cleanup = useCallback(() => {
+    if (animRef.current)   cancelAnimationFrame(animRef.current);
+    if (timerRef.current)  clearInterval(timerRef.current);
+    if (safetyRef.current) clearTimeout(safetyRef.current);
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+    try { audioElRef.current?.pause(); } catch {}
+  }, []);
+
+  useEffect(() => () => cleanup(), [cleanup]);
+
   useEffect(() => {
     const load = async () => {
-      // Moldura
       if (event.frameId) {
         try {
           const local = SpinDb.getFrames().find((f: any) => f.id === event.frameId);
-          let url: string | null = local?.imageUrl || null;
-
+          let url = local?.imageUrl || null;
           if (!url) {
-            const { data } = await supabase
-              .from('frames').select('image_url')
-              .eq('id', event.frameId).single();
+            const { data } = await supabase.from('frames').select('image_url').eq('id', event.frameId).single();
             url = data?.image_url || null;
           }
-
           if (url?.startsWith('http')) {
-            const cached = await getAsset(`frame_${event.frameId}`, url);
+            const src = await getAsset(`frame_${event.frameId}`, url);
             const img = new Image();
-            // NÃO usar crossOrigin para data URLs — tainta o canvas no iOS/Chrome
-            if (!cached.startsWith('data:')) {
-              img.crossOrigin = 'anonymous';
-            }
-            await new Promise<void>(resolve => {
-              if (img.complete && img.naturalWidth > 0) { resolve(); return; }
-              img.onload  = () => resolve();
-              img.onerror = () => resolve();
-              img.src = cached;
-            });
+            if (!src.startsWith('data:')) img.crossOrigin = 'anonymous';
+            img.src = src;
+            await new Promise<void>(res => { img.onload = () => res(); img.onerror = () => res(); });
             if (img.naturalWidth > 0) frameImgRef.current = img;
           }
-        } catch (e) { console.warn('[Frame]', e); }
+        } catch {}
       }
 
-      // Música — pré-carrega e aguarda buffering
       if (event.musicId && audioElRef.current) {
         try {
           const local = SpinDb.getMusicTracks().find((t: any) => t.id === event.musicId);
-          let url: string | null = local?.audioUrl || null;
-
+          let url = local?.audioUrl || null;
           if (!url) {
-            const { data } = await supabase
-              .from('music_tracks').select('file_url')
-              .eq('id', event.musicId).single();
+            const { data } = await supabase.from('music_tracks').select('file_url').eq('id', event.musicId).single();
             url = data?.file_url || null;
           }
-
           if (url) {
-            const cached = await getAsset(`music_${event.musicId}`, url);
-            audioElRef.current.src     = cached;
-            audioElRef.current.loop    = true;
-            audioElRef.current.volume  = 0.8;
-            audioElRef.current.preload = 'auto';
-            await audioElRef.current.load();
+            const src = await getAsset(`music_${event.musicId}`, url);
+            audioElRef.current.src = src;
+            audioElRef.current.loop = true;
+            audioElRef.current.volume = 0.8;
           }
-        } catch (e) { console.warn('[Music]', e); }
+        } catch {}
       }
 
-      setRecState('preview');
+      setPhase('ready');
     };
     load();
   }, []);
 
-  // ─── Inicializa câmera + loop canvas ───────────────────────────────────────
   useEffect(() => {
-    if (recState !== 'preview') return;
+    if (phase !== 'ready') return;
     let cancelled = false;
 
-    const init = async () => {
-      setError(null);
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: 'user',
-            width:  { ideal: 1080 },
-            height: { ideal: 1920 },
-          },
-          audio: {
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl:  false,
-          },
-        });
+    navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    }).then(stream => {
+      if (cancelled) { stream.getTracks().forEach(t => t.stop()); return; }
+      streamRef.current = stream;
 
-        if (cancelled) { stream.getTracks().forEach(t => t.stop()); return; }
-        streamRef.current = stream;
+      const vid = videoRef.current!;
+      vid.srcObject = stream;
+      vid.muted = true;
+      vid.playsInline = true;
+      vid.play().catch(() => {});
 
-        const video = videoRef.current!;
-        video.srcObject  = stream;
-        video.muted      = true;
-        video.playsInline = true;
-        video.autoplay   = true;
+      const canvas = canvasRef.current!;
+      canvas.width  = CANVAS_W;
+      canvas.height = CANVAS_H;
+      const ctx = canvas.getContext('2d', { alpha: false })!;
 
-        // Aguarda o vídeo estar pronto para desenhar
-        await new Promise<void>(resolve => {
-          video.onplaying = () => resolve();
-          video.play().catch(() => resolve());
-        });
+      const draw = () => {
+        if (vid.readyState >= 2) {
+          const vW = vid.videoWidth  || 640;
+          const vH = vid.videoHeight || 480;
+          const scale   = Math.max(CANVAS_W / vW, CANVAS_H / vH);
+          const drawW   = vW * scale;
+          const drawH   = vH * scale;
+          const offsetX = (CANVAS_W - drawW) / 2;
+          const offsetY = (CANVAS_H - drawH) / 2;
 
-        // Define canvas com dimensões EXATAS da câmera
-        const canvas = canvasRef.current!;
-        canvas.width  = video.videoWidth  || 1280;
-        canvas.height = video.videoHeight || 720;
-
-        const ctx = canvas.getContext('2d', { alpha: false })!;
-
-        const draw = () => {
-          if (!videoRef.current || videoRef.current.readyState < 2) {
-            animRef.current = requestAnimationFrame(draw);
-            return;
-          }
-
-          // Câmera espelhada
           ctx.save();
-          ctx.translate(canvas.width, 0);
+          ctx.translate(CANVAS_W, 0);
           ctx.scale(-1, 1);
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          ctx.drawImage(vid, offsetX, offsetY, drawW, drawH);
           ctx.restore();
 
-          // Moldura por cima (sem escalar, cobre tudo)
           if (frameImgRef.current?.complete && frameImgRef.current.naturalWidth > 0) {
-            ctx.drawImage(frameImgRef.current, 0, 0, canvas.width, canvas.height);
+            ctx.drawImage(frameImgRef.current, 0, 0, CANVAS_W, CANVAS_H);
           }
+        } else {
+          ctx.fillStyle = '#000';
+          ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+        }
+        animRef.current = requestAnimationFrame(draw);
+      };
+      draw();
+      setCamError(false);
+    }).catch(() => {
+      if (!cancelled) setCamError(true);
+    });
 
-          animRef.current = requestAnimationFrame(draw);
-        };
-        draw();
-
-      } catch {
-        if (!cancelled) setError('Permissão de câmera negada. Toque aqui para tentar novamente.');
-      }
-    };
-
-    init();
     return () => { cancelled = true; };
-  }, [recState]);
+  }, [phase]);
 
-  const stopAll = useCallback(() => {
-    if (animRef.current) cancelAnimationFrame(animRef.current);
-    if (timerRef.current) clearInterval(timerRef.current);
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    streamRef.current = null;
-    if (audioElRef.current) { audioElRef.current.pause(); audioElRef.current.currentTime = 0; }
+  const stopRecording = useCallback(() => {
+    if (timerRef.current)  { clearInterval(timerRef.current);  timerRef.current  = null; }
+    if (safetyRef.current) { clearTimeout(safetyRef.current);  safetyRef.current = null; }
+    try { audioElRef.current?.pause(); } catch {}
+    const rec = recorderRef.current;
+    if (rec && rec.state !== 'inactive') {
+      try { rec.stop(); } catch {}
+    }
   }, []);
 
-  useEffect(() => () => stopAll(), [stopAll]);
-
-  // ─── Upload em background ──────────────────────────────────────────────────
-  const uploadBackground = useCallback((blob: Blob, slug: string, videoId: string) => {
-    if (!navigator.onLine) return;
-
-    const doUpload = async () => {
-      try {
-        const ext  = blob.type.includes('mp4') ? 'mp4' : 'webm';
-        const path = `${event.id}/${slug}.${ext}`;
-
-        const { error: upErr } = await supabase.storage
-          .from('videos-processed')
-          .upload(path, blob, { contentType: blob.type, upsert: true });
-
-        if (upErr) throw upErr;
-
-        const { data } = supabase.storage.from('videos-processed').getPublicUrl(path);
-        const publicUrl = data.publicUrl;
-
-
-
-        // Salva vídeo com UUID válido
-        const { error: dbErr } = await (supabase.from('videos') as any).insert({
-          id: videoId,
-          event_id: event.id,
-          lead_id: null,
-          public_slug: slug,
-          processed_video_url: publicUrl,
-          duration_seconds: event.videoDuration,
-          status: 'completed',
-          created_at: new Date().toISOString(),
-          processed_at: new Date().toISOString(),
-        });
-
-        if (!dbErr) {
-          // Atualiza URL local para a permanente
-          const vids = SpinDb.getVideos();
-          const idx  = vids.findIndex((v: any) => v.id === videoId);
-          if (idx >= 0) SpinDb.saveVideo({ ...vids[idx], url: publicUrl, status: 'completed' });
-          console.log(`[Real360] ✅ ${slug} salvo`);
-        }
-      } catch (e) { console.error('[Upload]', e); }
-    };
-
-    doUpload();
-  }, [event]);
-
-  // ─── Finaliza gravação ─────────────────────────────────────────────────────
-  const finishRecording = useCallback((blob: Blob) => {
-    if (audioElRef.current) { audioElRef.current.pause(); audioElRef.current.currentTime = 0; }
-
+  const finish = useCallback(async (blob: Blob) => {
+    setPhase('saving');
     const slug    = Math.random().toString(36).slice(2, 7);
     const videoId = uuid();
     const localUrl = URL.createObjectURL(blob);
 
-    const videoRecord: VideoRecord = {
-      id: videoId, slug,
-      eventId: event.id,
-      leadId: lead?.id,
-      url: localUrl,
-      thumbnailUrl: '',
-      duration: event.videoDuration,
+    const record: VideoRecord = {
+      id: videoId, slug, eventId: event.id, leadId: lead?.id,
+      url: localUrl, thumbnailUrl: '', duration,
       status: 'pending',
       effectAppliedId: event.effectPresetId,
       frameAppliedId:  event.frameId,
@@ -259,218 +183,181 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
       createdAt: new Date().toISOString(),
     };
 
-    SpinDb.saveVideo(videoRecord);
-    stopAll();
+    SpinDb.saveVideo(record);
+    cleanup();
+    onRecordingComplete(record);
 
-    // Mostra resultado IMEDIATAMENTE — upload roda em background
-    onRecordingComplete(videoRecord);
-    uploadBackground(blob, slug, videoId);
-  }, [event, lead, onRecordingComplete, stopAll, uploadBackground]);
+    if (navigator.onLine) {
+      try {
+        const ext  = blob.type.includes('mp4') ? 'mp4' : 'webm';
+        const path = `${event.id}/${slug}.${ext}`;
+        const { error: upErr } = await supabase.storage
+          .from('videos-processed')
+          .upload(path, blob, { contentType: blob.type, upsert: true });
 
-  // ─── Inicia gravação ───────────────────────────────────────────────────────
-  const startRecording = useCallback(async () => {
+        if (!upErr) {
+          const { data } = supabase.storage.from('videos-processed').getPublicUrl(path);
+          await (supabase.from('videos') as any).insert({
+            id: videoId, event_id: event.id, lead_id: null,
+            public_slug: slug, processed_video_url: data.publicUrl,
+            duration_seconds: duration, status: 'completed',
+            created_at: new Date().toISOString(),
+            processed_at: new Date().toISOString(),
+          });
+          const vids = SpinDb.getVideos();
+          const v = vids.find((x: any) => x.id === videoId);
+          if (v) SpinDb.saveVideo({ ...v, url: data.publicUrl, status: 'completed' });
+        }
+      } catch {}
+    }
+  }, [event, lead, duration, cleanup, onRecordingComplete]);
+
+  const startRecording = useCallback(() => {
     const canvas = canvasRef.current;
     const stream = streamRef.current;
     if (!canvas || !stream) return;
 
-    // Inicia música ANTES de capturar — dá tempo do speaker emitir som
-    if (audioElRef.current) {
-      audioElRef.current.volume = 0.9;
-      try {
-        await audioElRef.current.play();
-        await new Promise(resolve => setTimeout(resolve, 300));
-      } catch (e) { console.warn('[Music]', e); }
-    }
+    try { audioElRef.current?.play().catch(() => {}); } catch {}
 
-    // Aguarda canvas ter ao menos alguns frames com moldura desenhada
-    await new Promise(resolve => setTimeout(resolve, 400));
-
-    // ─ Vídeo: canvas com moldura embutida ─
-    let videoTrack: MediaStreamTrack | null = null;
+    let recordStream = stream;
     try {
       const cs = (canvas as any).captureStream(30) as MediaStream;
-      const vt = cs.getVideoTracks();
-      if (vt.length > 0 && vt[0].readyState === 'live') {
-        videoTrack = vt[0];
-        console.log('[Canvas] captureStream OK — frame será gravado no vídeo');
-      } else {
-        console.warn('[Canvas] captureStream sem tracks ativos');
+      if (cs.getVideoTracks().length > 0) {
+        recordStream = new MediaStream([
+          cs.getVideoTracks()[0],
+          ...stream.getAudioTracks(),
+        ]);
       }
-    } catch (e) {
-      console.warn('[Canvas] captureStream falhou:', e);
-    }
+    } catch {}
 
-    // ─ Áudio: microfone direto da câmera (capta voz + música do ambiente) ─
-    const audioTrack = stream.getAudioTracks()[0] || null;
-
-    const tracks: MediaStreamTrack[] = [];
-    if (videoTrack) {
-      tracks.push(videoTrack);            // canvas com moldura
-    } else {
-      stream.getVideoTracks().forEach(t => tracks.push(t)); // fallback
-    }
-    if (audioTrack) tracks.push(audioTrack);
-
-    const recordStream = new MediaStream(tracks);
-
-    const mimeType = [
-      'video/mp4;codecs=h264,aac',
-      'video/webm;codecs=vp9,opus',
-      'video/webm;codecs=vp8,opus',
-      'video/webm',
-    ].find(t => MediaRecorder.isTypeSupported(t)) || '';
-
-    const recorderOptions: MediaRecorderOptions = {
-      ...(mimeType ? { mimeType } : {}),
-      videoBitsPerSecond: 2_500_000,  // 2.5 Mbps — boa qualidade, tamanho controlado
-      audioBitsPerSecond: 128_000,    // 128 kbps — qualidade de podcast
-    };
+    const mimeType = ['video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']
+      .find(t => MediaRecorder.isTypeSupported(t)) || '';
 
     chunksRef.current = [];
-    const recorder = new MediaRecorder(
-      streamRef.current!,
-      recorderOptions
-    );
+    const rec = new MediaRecorder(recordStream, {
+      ...(mimeType ? { mimeType } : {}),
+      videoBitsPerSecond: 2_500_000,
+      audioBitsPerSecond: 128_000,
+    });
+    recorderRef.current = rec;
+    rec.ondataavailable = e => { if (e.data?.size > 0) chunksRef.current.push(e.data); };
+    rec.onstop = () => finish(new Blob(chunksRef.current, { type: mimeType || 'video/webm' }));
+    rec.start(200);
 
-    recorderRef.current = recorder;
-    recorder.ondataavailable = e => { if (e.data?.size > 0) chunksRef.current.push(e.data); };
-    recorder.onstop = () => finishRecording(new Blob(chunksRef.current, { type: mimeType || 'video/webm' }));
-    recorder.start(200);
+    setPhase('recording');
+    setTimeLeft(duration);
 
-    setRecState('recording');
-    setTimeLeft(event.videoDuration);
-    let rem = event.videoDuration;
+    let rem = duration;
     timerRef.current = setInterval(() => {
-      rem--;
+      rem -= 1;
       setTimeLeft(rem);
-      if (rem <= 0) { clearInterval(timerRef.current!); recorder.stop(); }
+      if (rem <= 0) stopRecording();
     }, 1000);
-  }, [event.videoDuration, finishRecording]);
 
-  // ─── Contagem regressiva ───────────────────────────────────────────────────
+    safetyRef.current = setTimeout(() => stopRecording(), (duration + 3) * 1000);
+  }, [duration, finish, stopRecording]);
+
   const startCountdown = useCallback(() => {
-    setRecState('countdown');
-    let count = 3;
-    setCountdown(count);
+    setPhase('countdown');
+    let c = 3;
+    setCountdown(c);
     const t = setInterval(() => {
-      count--;
-      setCountdown(count);
-      if (count <= 0) { clearInterval(t); startRecording(); }
+      c--;
+      setCountdown(c);
+      if (c <= 0) { clearInterval(t); startRecording(); }
     }, 1000);
   }, [startRecording]);
 
-  const progress = ((event.videoDuration - timeLeft) / event.videoDuration) * 100;
+  const cancel = useCallback(() => {
+    stopRecording();
+    cleanup();
+    onCancel();
+  }, [stopRecording, cleanup, onCancel]);
 
-  // ─── Render ────────────────────────────────────────────────────────────────
+  const progress = ((duration - timeLeft) / duration) * 100;
+
   return (
-    <div className="fixed inset-0 z-[200] bg-black flex flex-col">
+    <div className="fixed inset-0 z-[200] bg-black">
       <audio ref={audioElRef} playsInline />
       <video ref={videoRef} className="hidden" playsInline muted autoPlay />
 
-      <div className="relative flex-1 overflow-hidden bg-black">
-        {/* Canvas: câmera espelhada + moldura */}
-        <canvas
-          ref={canvasRef}
-          className="absolute inset-0 w-full h-full object-contain"
-        />
+      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" style={{ objectFit: 'cover' }} />
 
-        {/* Loading */}
-        {recState === 'loading' && (
-          <div className="absolute inset-0 z-30 bg-black flex flex-col items-center justify-center gap-4">
-            <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-            <p className="text-slate-400 text-sm font-mono">Preparando câmera...</p>
+      {phase === 'loading' && (
+        <div className="absolute inset-0 z-10 bg-black flex flex-col items-center justify-center gap-4">
+          <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+          <p className="text-white text-sm font-mono">Preparando câmera...</p>
+        </div>
+      )}
+
+      {camError && (
+        <div className="absolute inset-0 z-10 bg-black/90 flex flex-col items-center justify-center gap-6 p-8 text-center">
+          <p className="text-white font-bold text-xl">Câmera bloqueada</p>
+          <p className="text-slate-400 text-sm">Permita o acesso à câmera e recarregue.</p>
+          <button onClick={cancel} className="px-6 py-3 bg-slate-800 text-white rounded-2xl">Voltar</button>
+        </div>
+      )}
+
+      {phase === 'countdown' && (
+        <div className="absolute inset-0 z-10 flex items-end justify-center pb-48 pointer-events-none">
+          <div className="bg-black/60 backdrop-blur w-24 h-24 rounded-3xl flex items-center justify-center">
+            <span className="text-white text-6xl font-black">{countdown}</span>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Erro */}
-        {error && (
-          <div
-            className="absolute inset-0 z-30 bg-black/90 flex flex-col items-center justify-center p-8 gap-6 text-center cursor-pointer"
-            onClick={() => { setError(null); setRecState('preview'); }}>
-            <AlertTriangle className="w-16 h-16 text-amber-500" />
-            <p className="text-white font-bold text-xl">{error}</p>
-            <span className="text-slate-400 text-sm">Toque para tentar novamente</span>
+      {phase === 'recording' && (
+        <>
+          <div className="absolute top-8 left-5 z-10 flex items-center gap-2 bg-red-600 px-4 py-2 rounded-full">
+            <div className="w-2.5 h-2.5 bg-white rounded-full animate-pulse" />
+            <span className="text-white text-sm font-bold font-mono">GRAVANDO</span>
           </div>
-        )}
-
-        {/* Contagem — canto superior direito, discreta */}
-        {recState === 'countdown' && (
-          <div className="absolute top-8 right-8 z-30">
-            <div className="w-16 h-16 bg-black/75 backdrop-blur rounded-2xl flex items-center justify-center border border-white/10">
-              <span className="text-white text-4xl font-black leading-none">{countdown}</span>
-            </div>
+          <div className="absolute top-8 right-20 z-10 bg-black/70 backdrop-blur px-4 py-2 rounded-2xl text-center min-w-[60px]">
+            <p className="text-white text-3xl font-black font-mono leading-none">{timeLeft}</p>
+            <p className="text-slate-400 text-[10px] font-mono">seg</p>
           </div>
-        )}
+          <div className="absolute bottom-0 left-0 right-0 h-2 bg-black/40 z-10">
+            <div className="h-full bg-red-500 transition-all duration-1000" style={{ width: `${progress}%` }} />
+          </div>
+        </>
+      )}
 
-        {/* HUD gravação */}
-        {recState === 'recording' && (
+      {phase === 'saving' && (
+        <div className="absolute inset-0 z-10 bg-black/80 flex flex-col items-center justify-center gap-4">
+          <div className="w-14 h-14 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+          <p className="text-white font-bold">Processando...</p>
+        </div>
+      )}
+
+      {(phase === 'ready' || phase === 'countdown' || phase === 'recording') && (
+        <button
+          onClick={cancel}
+          className="absolute top-8 z-20 w-12 h-12 bg-black/60 backdrop-blur rounded-full flex items-center justify-center"
+          style={{ right: phase === 'recording' ? '8px' : '20px' }}>
+          <X className="w-6 h-6 text-white" />
+        </button>
+      )}
+
+      <div className="absolute bottom-10 left-0 right-0 z-10 flex items-center justify-center gap-8">
+        {phase === 'ready' && !camError && (
           <>
-            <div className="absolute top-6 left-5 z-30 flex items-center gap-2 bg-red-600 px-4 py-2 rounded-full shadow-lg">
-              <div className="w-2.5 h-2.5 rounded-full bg-white animate-pulse" />
-              <span className="text-white text-sm font-bold font-mono">GRAVANDO</span>
-            </div>
-
-            <div className="absolute top-6 right-5 z-30 bg-black/65 backdrop-blur px-3 py-2 rounded-xl text-center">
-              <p className="text-white text-2xl font-black font-mono leading-none">{timeLeft}</p>
-              <p className="text-slate-400 text-[10px] font-mono">seg</p>
-            </div>
-
-            <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/40 z-30">
-              <div className="h-full bg-red-500 transition-all duration-1000" style={{ width: `${progress}%` }} />
-            </div>
-          </>
-        )}
-
-        {/* Fechar (preview e countdown) */}
-        {(recState === 'preview') && !error && (
-          <div className="absolute top-6 right-5 z-40">
-            <button
-              onClick={() => { stopAll(); onCancel(); }}
-              className="w-11 h-11 bg-black/60 backdrop-blur rounded-full flex items-center justify-center">
-              <X className="w-5 h-5 text-white" />
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Controles */}
-      <div className="bg-black py-10 flex items-center justify-center gap-8 z-30">
-        {recState === 'preview' && !error && (
-          <>
-            <button
-              onClick={() => { stopAll(); onCancel(); }}
-              className="w-14 h-14 bg-slate-800 hover:bg-slate-700 rounded-full flex items-center justify-center">
+            <button onClick={cancel} className="w-14 h-14 bg-black/60 backdrop-blur rounded-full flex items-center justify-center">
               <X className="w-6 h-6 text-white" />
             </button>
-
-            <button
-              onClick={startCountdown}
-              className="w-24 h-24 rounded-full bg-white flex items-center justify-center shadow-2xl border-4 border-red-500 active:scale-95 transition-transform">
+            <button onClick={startCountdown} className="w-24 h-24 rounded-full bg-white border-4 border-red-500 flex items-center justify-center shadow-2xl active:scale-95 transition-transform">
               <div className="w-16 h-16 bg-red-500 rounded-full" />
             </button>
-
-            <button
-              onClick={() => { setError(null); setRecState('preview'); }}
-              className="w-14 h-14 bg-slate-800 hover:bg-slate-700 rounded-full flex items-center justify-center">
-              <RefreshCw className="w-6 h-6 text-white" />
-            </button>
+            <div className="w-14 h-14" />
           </>
         )}
-
-        {recState === 'countdown' && (
+        {phase === 'countdown' && (
           <div className="w-24 h-24 rounded-full bg-slate-800/50 border-4 border-slate-700 flex items-center justify-center">
-            <div className="w-16 h-16 bg-slate-700 rounded-full" />
+            <div className="w-16 h-16 bg-slate-600 rounded-full" />
           </div>
         )}
-
-        {recState === 'recording' && (
-          <button
-            onClick={() => {
-              recorderRef.current?.stop();
-              if (timerRef.current) clearInterval(timerRef.current);
-            }}
-            className="w-24 h-24 rounded-full bg-white flex items-center justify-center shadow-2xl border-4 border-red-500 active:scale-95 transition-transform">
-            <div className="w-10 h-10 bg-red-500 rounded-md" />
+        {phase === 'recording' && (
+          <button onClick={stopRecording} className="w-24 h-24 rounded-full bg-white border-4 border-red-500 flex items-center justify-center shadow-2xl active:scale-95 transition-transform">
+            <div className="w-10 h-10 bg-red-500 rounded-lg" />
           </button>
         )}
       </div>
