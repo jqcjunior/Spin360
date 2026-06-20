@@ -45,7 +45,8 @@ export class RecordingService {
         }
       };
 
-      rec.start(200);
+      // CORREÇÃO APLICADA AQUI: Gravação contínua, sem fatiamento para o iOS
+      rec.start();
 
       LoggerService.log({
         module: 'RecordingService',

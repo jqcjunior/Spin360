@@ -25,7 +25,15 @@ export class UploadService {
     let success = false;
     let publicUrl = '';
 
-    const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
+    // ==========================================
+    // AJUSTE PARA IOS: Limpeza do MimeType e Blob
+    // ==========================================
+    const isMp4 = blob.type.includes('mp4');
+    const cleanMime = isMp4 ? 'video/mp4' : 'video/webm';
+    const ext = isMp4 ? 'mp4' : 'webm';
+    
+    // Recriamos o Blob puro para remover metadados de codec que travam o Safari
+    const cleanBlob = new Blob([blob], { type: cleanMime });
     const path = `${eventId}/${slug}.${ext}`;
 
     while (retryCount < maxRetries && !success) {
@@ -36,10 +44,10 @@ export class UploadService {
           metadata: { eventId, videoId, slug, attempt: retryCount + 1 },
         });
 
-        const contentType = blob.type.includes('mp4') ? 'video/mp4' : 'video/webm';
+        // Upload usando o cleanBlob e forçando o contentType estrito no Supabase
         const { error: upErr } = await supabase.storage
           .from('videos-processed')
-          .upload(path, blob, { contentType, upsert: true });
+          .upload(path, cleanBlob, { contentType: cleanMime, upsert: true });
 
         if (upErr) throw upErr;
 
