@@ -20,6 +20,7 @@ type RecorderState = 'requesting' | 'preview' | 'countdown' | 'recording' | 'pro
 
 export default function CameraRecorder({ event, lead, onRecordingComplete, onCancel }: CameraRecorderProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -30,13 +31,44 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
   const [timeLeft, setTimeLeft] = useState(event.videoDuration);
   const [error, setError] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState('');
+  const [frameData, setFrameData] = useState<{ imageUrl: string } | null>(null);
+  const [musicUrl, setMusicUrl] = useState<string | null>(null);
 
-  const frame = SpinDb.getFrames().find(f => f.id === event.frameId);
+  // Carrega moldura e música do Supabase
+  useEffect(() => {
+    const loadAssets = async () => {
+      // Carregar moldura
+      if (event.frameId) {
+        const local = SpinDb.getFrames().find(f => f.id === event.frameId);
+        if (local) {
+          setFrameData({ imageUrl: local.imageUrl });
+        } else {
+          const { data } = await supabase.from('frames').select('image_url').eq('id', event.frameId).single();
+          if (data) setFrameData({ imageUrl: data.image_url });
+        }
+      }
+      // Carregar música
+      if (event.musicId) {
+        const local = SpinDb.getMusicTracks().find(t => t.id === event.musicId);
+        if (local) {
+          setMusicUrl(local.audioUrl);
+        } else {
+          const { data } = await supabase.from('music_tracks').select('file_url').eq('id', event.musicId).single();
+          if (data) setMusicUrl(data.file_url);
+        }
+      }
+    };
+    loadAssets();
+  }, [event.frameId, event.musicId]);
 
   const stopStream = useCallback(() => {
     streamRef.current?.getTracks().forEach(t => t.stop());
     streamRef.current = null;
     if (timerRef.current) clearInterval(timerRef.current);
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
   }, []);
 
   const startCamera = useCallback(async () => {
@@ -63,8 +95,9 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
 
   const finishRecording = useCallback(async (blob: Blob) => {
     setRecState('processing');
-    setUploadProgress('Salvando na galeria...');
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current.currentTime = 0; }
 
+    setUploadProgress('Salvando na galeria...');
     const localUrl = URL.createObjectURL(blob);
     try {
       const a = document.createElement('a');
@@ -135,6 +168,15 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
 
   const startRecording = useCallback(() => {
     if (!streamRef.current) return;
+
+    // Tocar música de fundo
+    if (audioRef.current && musicUrl) {
+      audioRef.current.src = musicUrl;
+      audioRef.current.volume = 0.7;
+      audioRef.current.loop = true;
+      audioRef.current.play().catch(() => {});
+    }
+
     chunksRef.current = [];
     const mimeType = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm';
     const recorder = new MediaRecorder(streamRef.current, { mimeType });
@@ -150,12 +192,15 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
       setTimeLeft(remaining);
       if (remaining <= 0) { clearInterval(timerRef.current!); recorder.stop(); }
     }, 1000);
-  }, [event.videoDuration, finishRecording]);
+  }, [event.videoDuration, finishRecording, musicUrl]);
 
   const startCountdown = useCallback(() => {
     setRecState('countdown');
     let count = 3; setCountdown(count);
-    const t = setInterval(() => { count--; setCountdown(count); if (count <= 0) { clearInterval(t); startRecording(); } }, 1000);
+    const t = setInterval(() => {
+      count--; setCountdown(count);
+      if (count <= 0) { clearInterval(t); startRecording(); }
+    }, 1000);
   }, [startRecording]);
 
   const stopEarly = () => {
@@ -166,31 +211,63 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
   };
 
   const renderFrame = () => {
-    if (!frame) return null;
-    if (frame.imageUrl.startsWith('http'))
-      return <img src={frame.imageUrl} alt="frame" className="absolute inset-0 w-full h-full object-cover pointer-events-none z-20" />;
-    return <div className="absolute inset-0 pointer-events-none z-20" dangerouslySetInnerHTML={{ __html: DEMO_FRAMES_SVG[frame.imageUrl] || '' }} />;
+    if (!frameData) return null;
+    const { imageUrl } = frameData;
+    if (imageUrl.startsWith('http')) {
+      return (
+        <img
+          src={imageUrl}
+          alt="moldura"
+          className="absolute inset-0 w-full h-full object-cover pointer-events-none z-20"
+          style={{ mixBlendMode: 'normal' }}
+        />
+      );
+    }
+    return (
+      <div
+        className="absolute inset-0 pointer-events-none z-20"
+        dangerouslySetInnerHTML={{ __html: DEMO_FRAMES_SVG[imageUrl] || '' }}
+      />
+    );
   };
 
   const progress = ((event.videoDuration - timeLeft) / event.videoDuration) * 100;
 
   return (
     <div className="fixed inset-0 z-[200] bg-black flex flex-col">
+      {/* Áudio de fundo (invisível) */}
+      <audio ref={audioRef} />
+
       <div className="relative flex-1 overflow-hidden">
-        <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-cover" style={{ transform: 'scaleX(-1)' }} />
+        <video
+          ref={videoRef}
+          autoPlay playsInline muted
+          className="absolute inset-0 w-full h-full object-cover"
+          style={{ transform: 'scaleX(-1)' }}
+        />
+
         {renderFrame()}
+
         {(recState === 'requesting' || error) && (
           <div className="absolute inset-0 flex flex-col items-center justify-center z-30 bg-black/80 p-8 text-center space-y-6">
             <Camera className="w-20 h-20 text-slate-500" />
             <p className="text-white font-bold text-xl">{error || 'Solicitando câmera...'}</p>
-            {error && <button onClick={startCamera} className="px-8 py-4 bg-indigo-600 text-white rounded-2xl font-bold text-lg">Tentar Novamente</button>}
+            {error && (
+              <button onClick={startCamera} className="px-8 py-4 bg-indigo-600 text-white rounded-2xl font-bold text-lg">
+                Tentar Novamente
+              </button>
+            )}
           </div>
         )}
+
         {recState === 'countdown' && (
           <div className="absolute inset-0 flex items-center justify-center z-30 bg-black/30">
-            <span className="text-[160px] font-black text-white drop-shadow-2xl leading-none animate-pulse">{countdown === 0 ? '🎬' : countdown}</span>
+            <span className="text-[160px] font-black text-white drop-shadow-2xl leading-none animate-pulse">
+              {countdown === 0 ? '🎬' : countdown}
+            </span>
           </div>
         )}
+
         {recState === 'processing' && (
           <div className="absolute inset-0 flex flex-col items-center justify-center z-30 bg-black/80 space-y-4">
             <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
@@ -198,12 +275,15 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
             <p className="text-indigo-400 text-sm font-mono">{uploadProgress}</p>
           </div>
         )}
+
         {recState === 'recording' && (
           <>
             <div className="absolute top-6 left-0 right-0 flex justify-between px-5 z-30">
-              <div className="flex items-center gap-2 bg-red-600 px-4 py-2 rounded-full">
+              <div className="flex items-center gap-2 bg-red-600 px-4 py-2 rounded-full shadow-lg">
                 <div className="w-2.5 h-2.5 rounded-full bg-white animate-pulse" />
-                <span className="text-white text-sm font-bold font-mono">{event.videoDuration - timeLeft + 1}S / {event.videoDuration}S</span>
+                <span className="text-white text-sm font-bold font-mono">
+                  {event.videoDuration - timeLeft + 1}S / {event.videoDuration}S
+                </span>
               </div>
               <div className="bg-black/60 backdrop-blur px-4 py-2 rounded-full">
                 <span className="text-white text-sm font-bold font-mono">REC ●</span>
@@ -214,30 +294,43 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
             </div>
           </>
         )}
+
         {(recState === 'preview' || recState === 'countdown') && (
           <div className="absolute top-6 right-5 z-40">
-            <button onClick={() => { stopStream(); onCancel(); }} className="w-11 h-11 bg-black/50 backdrop-blur rounded-full flex items-center justify-center">
+            <button onClick={() => { stopStream(); onCancel(); }}
+              className="w-11 h-11 bg-black/50 backdrop-blur rounded-full flex items-center justify-center">
               <X className="w-5 h-5 text-white" />
             </button>
           </div>
         )}
       </div>
+
       <div className="bg-black py-10 flex items-center justify-center gap-8 z-30">
         {recState === 'preview' && (
           <>
-            <button onClick={() => { stopStream(); onCancel(); }} className="w-14 h-14 bg-slate-800 rounded-full flex items-center justify-center"><X className="w-6 h-6 text-white" /></button>
-            <button onClick={startCountdown} className="w-24 h-24 rounded-full bg-white flex items-center justify-center shadow-2xl border-4 border-red-500 active:scale-95 transition-transform">
+            <button onClick={() => { stopStream(); onCancel(); }}
+              className="w-14 h-14 bg-slate-800 rounded-full flex items-center justify-center">
+              <X className="w-6 h-6 text-white" />
+            </button>
+            <button onClick={startCountdown}
+              className="w-24 h-24 rounded-full bg-white flex items-center justify-center shadow-2xl border-4 border-red-500 active:scale-95 transition-transform">
               <div className="w-16 h-16 bg-red-500 rounded-full" />
             </button>
-            <button onClick={startCamera} className="w-14 h-14 bg-slate-800 rounded-full flex items-center justify-center"><RefreshCw className="w-6 h-6 text-white" /></button>
+            <button onClick={startCamera}
+              className="w-14 h-14 bg-slate-800 rounded-full flex items-center justify-center">
+              <RefreshCw className="w-6 h-6 text-white" />
+            </button>
           </>
         )}
         {recState === 'recording' && (
-          <button onClick={stopEarly} className="w-24 h-24 rounded-full bg-white flex items-center justify-center shadow-2xl border-4 border-red-500 active:scale-95 transition-transform">
+          <button onClick={stopEarly}
+            className="w-24 h-24 rounded-full bg-white flex items-center justify-center shadow-2xl border-4 border-red-500 active:scale-95 transition-transform">
             <div className="w-10 h-10 bg-red-500 rounded-md" />
           </button>
         )}
-        {recState === 'processing' && <p className="text-slate-500 text-xs font-mono">{uploadProgress || 'Aguarde...'}</p>}
+        {recState === 'processing' && (
+          <p className="text-slate-500 text-xs font-mono">{uploadProgress || 'Aguarde...'}</p>
+        )}
       </div>
     </div>
   );
