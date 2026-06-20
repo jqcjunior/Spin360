@@ -50,35 +50,47 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
   useEffect(() => {
     const loadCatalog = async () => {
       const { data: framesData } = await supabase
-        .from('frames').select('*').eq('is_active', true).order('created_at');
+        .from('frames')
+        .select('id, name, image_url, tags, is_active, created_at')
+        .eq('is_active', true)
+        .order('created_at', { ascending: true });
+
       const { data: tracksData } = await supabase
-        .from('music_tracks').select('*').eq('is_active', true).order('created_at');
+        .from('music_tracks')
+        .select('id, name, file_url, volume, fade_in_seconds, fade_out_seconds, is_loop, start_point_seconds, created_at')
+        .eq('is_active', true)
+        .order('created_at', { ascending: true });
 
-      if (framesData) {
-         const mapped = framesData.map((f: any) => ({
-           id: f.id, name: f.name, imageUrl: f.image_url,
-           category: 'Geral', tags: f.tags || [], isActive: f.is_active,
-           createdAt: f.created_at,
-         }));
-         setSupabaseFrames(mapped);
-         mapped.forEach(f => SpinDb.saveFrame(f));
-      }
+      // Limpa SpinDb e recarrega APENAS com dados do Supabase
+      const db = JSON.parse(localStorage.getItem('spin360_db') || '{}');
+      const mappedFrames = (framesData || []).map((f: any) => ({
+        id: f.id, name: f.name, imageUrl: f.image_url,
+        category: 'Geral', tags: f.tags || [], isActive: f.is_active,
+        createdAt: f.created_at,
+      }));
+      const mappedTracks = (tracksData || []).map((t: any) => ({
+        id: t.id, title: t.name, artist: '', audioUrl: t.file_url,
+        volume: t.volume || 0.8, fadeIn: t.fade_in_seconds || 1,
+        fadeOut: t.fade_out_seconds || 1, loop: t.is_loop !== false,
+        startPoint: t.start_point_seconds || 0, endPoint: 30,
+        createdAt: t.created_at,
+      }));
 
-      if (tracksData) {
-         const mapped = tracksData.map((t: any) => ({
-           id: t.id, title: t.name, artist: '', audioUrl: t.file_url,
-           volume: t.volume || 0.8, fadeIn: t.fade_in_seconds || 1,
-           fadeOut: t.fade_out_seconds || 1, loop: t.is_loop !== false,
-           startPoint: t.start_point_seconds || 0, endPoint: 30,
-           createdAt: t.created_at,
-         }));
-         setSupabaseTracks(mapped);
-         mapped.forEach(t => SpinDb.saveMusicTrack(t));
+      // Evita loops infinitos verificando se houve mudança real
+      const hasChanged = JSON.stringify(db.frames) !== JSON.stringify(mappedFrames) ||
+                         JSON.stringify(db.tracks) !== JSON.stringify(mappedTracks);
+
+      if (hasChanged) {
+        db.frames = mappedFrames;
+        db.tracks = mappedTracks;
+        localStorage.setItem('spin360_db', JSON.stringify(db));
+        setSupabaseFrames(mappedFrames);
+        setSupabaseTracks(mappedTracks);
+        triggerReload();
       }
-      triggerReload();
     };
     loadCatalog();
-  }, []);
+  }, [dbTick]);
   const [isPending, startTransition] = useTransition();
   const triggerReload = () => startTransition(() => setDbTick(prev => prev + 1));
 
