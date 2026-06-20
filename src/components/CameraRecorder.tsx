@@ -1,14 +1,16 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { X } from 'lucide-react';
 import { Event, VideoLead, VideoRecord } from '../types';
 import { SpinDb } from '../db';
 import { supabase } from '../lib/supabase';
 import { getAsset } from '../lib/cache';
+
+// Services
+import { LoggerService } from '../services/LoggerService';
+import { CameraService } from '../services/CameraService';
+import { AudioMixerService } from '../services/AudioMixerService';
+import { RecordingService } from '../services/RecordingService';
+import { UploadService } from '../services/UploadService';
 
 interface Props {
   event: Event;
@@ -29,17 +31,25 @@ const REC_W = 720;
 const REC_H = 1280;
 
 export default function CameraRecorder({ event, lead, onRecordingComplete, onCancel }: Props) {
-  const videoRef    = useRef<HTMLVideoElement>(null);
-  const canvasRef   = useRef<HTMLCanvasElement>(null);
-  const audioElRef  = useRef<HTMLAudioElement>(null);
-  const frameImgRef = useRef<HTMLImageElement | null>(null);
-  const animRef     = useRef<number | null>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const streamRef   = useRef<MediaStream | null>(null);
-  const chunksRef   = useRef<Blob[]>([]);
-  const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
-  const safetyRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const audioCtxRef = useRef<any>(null); // Ref para evitar memory leak do AudioContext
+  const videoRef      = useRef<HTMLVideoElement>(null);
+  const canvasRef     = useRef<HTMLCanvasElement>(null);
+  const audioElRef    = useRef<HTMLAudioElement>(null);
+  const frameImgRef   = useRef<HTMLImageElement | null>(null);
+  const animRef       = useRef<number | null>(null);
+  const streamRef     = useRef<MediaStream | null>(null);
+  const timerRef      = useRef<any>(null);
+  const safetyRef     = useRef<any>(null);
+  const createdUrlsRef = useRef<string[]>([]);
+  const recordingStartTimeRef = useRef<number | null>(null);
+
+  // Instâncias de Serviços segregados
+  const cameraServiceRef     = useRef<CameraService | null>(null);
+  const audioMixerServiceRef = useRef<AudioMixerService | null>(null);
+  const recordingServiceRef  = useRef<RecordingService | null>(null);
+
+  if (!cameraServiceRef.current) cameraServiceRef.current = new CameraService();
+  if (!audioMixerServiceRef.current) audioMixerServiceRef.current = new AudioMixerService();
+  if (!recordingServiceRef.current) recordingServiceRef.current = new RecordingService();
 
   const duration = event.videoDuration || 10;
 
@@ -52,19 +62,39 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
   // ── Limpeza ──────────────────────────────────────────────────────────────
   const cleanup = useCallback(() => {
     if (animRef.current)   cancelAnimationFrame(animRef.current);
-    if (timerRef.current)  clearInterval(timerRef.current);
+    if (timerRef.current)  clearTimeout(timerRef.current);
     if (safetyRef.current) clearTimeout(safetyRef.current);
-    streamRef.current?.getTracks().forEach(t => t.stop());
+    recordingStartTimeRef.current = null;
+
+    // Resgatar tracks e fechar câmera
+    cameraServiceRef.current?.stopCamera();
     streamRef.current = null;
     
     try { audioElRef.current?.pause(); } 
-    catch (e) { console.error('Erro ao pausar audio na limpeza:', e); }
-
-    // 2. Encerrar o AudioContext para evitar "limit exceeded"
-    if (audioCtxRef.current) {
-      audioCtxRef.current.close().catch((e: any) => console.error('Erro ao fechar AudioContext:', e));
-      audioCtxRef.current = null;
+    catch (e) {
+      LoggerService.error({
+        module: 'CameraRecorder',
+        action: 'cleanup_pauseAudio',
+        error: e,
+      });
     }
+
+    // Encerrar o Mixer de Áudio para evitar leaks de memória ("limit exceeded" no Safari)
+    audioMixerServiceRef.current?.destroy();
+
+    // Revogar URLs de Object URLs temporários criados
+    createdUrlsRef.current.forEach(url => {
+      try {
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        LoggerService.error({
+          module: 'CameraRecorder',
+          action: 'cleanup_revokeUrl',
+          error: e,
+        });
+      }
+    });
+    createdUrlsRef.current = [];
   }, []);
 
   useEffect(() => () => cleanup(), [cleanup]);
@@ -92,7 +122,13 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
               setFrameUrl(src);
             }
           }
-        } catch (e) { console.error('Erro ao carregar moldura:', e); }
+        } catch (e) {
+          LoggerService.error({
+            module: 'CameraRecorder',
+            action: 'load_frame',
+            error: e,
+          });
+        }
       }
 
       // Música
@@ -110,80 +146,105 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
             audioElRef.current.loop = true;
             audioElRef.current.volume = 0.8;
           }
-        } catch (e) { console.error('Erro ao carregar musica:', e); }
+        } catch (e) {
+          LoggerService.error({
+            module: 'CameraRecorder',
+            action: 'load_music',
+            error: e,
+          });
+        }
       }
 
       setPhase('ready');
     };
     load();
-  }, []);
+  }, [event.frameId, event.musicId]);
 
-  // ── Câmera ───────────────────────────────────────────────────────────────
+  // ── Câmera e loop de desenho no Canvas ────────────────────────────────────
   useEffect(() => {
     if (phase !== 'ready') return;
     let cancelled = false;
 
-    navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-    }).then(stream => {
-      if (cancelled) { stream.getTracks().forEach(t => t.stop()); return; }
-      streamRef.current = stream;
-
-      const vid = videoRef.current!;
-      vid.srcObject = stream;
-      vid.muted = true;
-      vid.playsInline = true;
-      vid.play().catch((e) => console.error('Erro ao tocar video de preview:', e));
-
-      const canvas = canvasRef.current!;
-      canvas.width  = REC_W;
-      canvas.height = REC_H;
-      const ctx = canvas.getContext('2d', { alpha: false })!;
-
-      const draw = () => {
-        // 3. Fuga do loop infinito: Cancela o frame se o componente foi desmontado
-        if (cancelled) return;
-
-        if (vid.readyState >= 2) {
-          const vW = vid.videoWidth  || 1280;
-          const vH = vid.videoHeight || 720;
-          const scale   = Math.max(REC_W / vW, REC_H / vH);
-          const drawW   = vW * scale;
-          const drawH   = vH * scale;
-          const offX    = (REC_W - drawW) / 2;
-          const offY    = (REC_H - drawH) / 2;
-
-          ctx.save();
-          ctx.translate(REC_W, 0);
-          ctx.scale(-1, 1);
-          ctx.drawImage(vid, offX, offY, drawW, drawH);
-          ctx.restore();
-
-          if (frameImgRef.current?.complete && frameImgRef.current.naturalWidth > 0) {
-            ctx.drawImage(frameImgRef.current, 0, 0, REC_W, REC_H);
-          }
+    cameraServiceRef.current?.startCamera()
+      .then(stream => {
+        if (cancelled) {
+          cameraServiceRef.current?.stopCamera();
+          return;
         }
-        animRef.current = requestAnimationFrame(draw);
-      };
-      draw();
-      setCamError(false);
-    }).catch((e) => {
-      console.error('Erro ao acessar getUserMedia:', e);
-      if (!cancelled) setCamError(true);
-    });
+        streamRef.current = stream;
+
+        const vid = videoRef.current!;
+        vid.srcObject = stream;
+        vid.muted = true;
+        vid.playsInline = true;
+        vid.play().catch((e) => {
+          LoggerService.error({
+            module: 'CameraRecorder',
+            action: 'play_preview_video',
+            error: e,
+          });
+        });
+
+        const canvas = canvasRef.current!;
+        canvas.width  = REC_W;
+        canvas.height = REC_H;
+        const ctx = canvas.getContext('2d', { alpha: false })!;
+
+        const draw = () => {
+          if (cancelled) return;
+
+          if (vid.readyState >= 2) {
+            const vW = vid.videoWidth  || 1280;
+            const vH = vid.videoHeight || 720;
+            const scale   = Math.max(REC_W / vW, REC_H / vH);
+            const drawW   = vW * scale;
+            const drawH   = vH * scale;
+            const offX    = (REC_W - drawW) / 2;
+            const offY    = (REC_H - drawH) / 2;
+
+            ctx.save();
+            ctx.translate(REC_W, 0);
+            ctx.scale(-1, 1);
+            ctx.drawImage(vid, offX, offY, drawW, drawH);
+            ctx.restore();
+
+            if (frameImgRef.current?.complete && frameImgRef.current.naturalWidth > 0) {
+              ctx.drawImage(frameImgRef.current, 0, 0, REC_W, REC_H);
+            }
+          }
+          animRef.current = requestAnimationFrame(draw);
+        };
+        draw();
+        setCamError(false);
+      })
+      .catch((e) => {
+        LoggerService.error({
+          module: 'CameraRecorder',
+          action: 'getUserMedia',
+          error: e,
+        });
+        if (!cancelled) setCamError(true);
+      });
 
     return () => { cancelled = true; };
   }, [phase]);
 
   // ── Para gravação ─────────────────────────────────────────────────────────
   const stopRecording = useCallback(() => {
-    if (timerRef.current)  { clearInterval(timerRef.current);  timerRef.current  = null; }
+    if (timerRef.current)  { clearTimeout(timerRef.current);  timerRef.current  = null; }
     if (safetyRef.current) { clearTimeout(safetyRef.current);  safetyRef.current = null; }
-    try { audioElRef.current?.pause(); } catch (e) { console.error('Erro ao pausar audio:', e); }
-    if (recorderRef.current?.state !== 'inactive') {
-      try { recorderRef.current?.stop(); } catch (e) { console.error('Erro ao parar gravador:', e); }
+    recordingStartTimeRef.current = null;
+
+    try { audioElRef.current?.pause(); } 
+    catch (e) {
+      LoggerService.error({
+        module: 'CameraRecorder',
+        action: 'stopRecording_pauseMusic',
+        error: e,
+      });
     }
+
+    recordingServiceRef.current?.stopRecording();
   }, []);
 
   // ── Finaliza e sobe ───────────────────────────────────────────────────────
@@ -192,6 +253,7 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
     const slug    = Math.random().toString(36).slice(2, 7);
     const videoId = uuid();
     const localUrl = URL.createObjectURL(blob);
+    createdUrlsRef.current.push(localUrl);
 
     const record: VideoRecord = {
       id: videoId, slug, eventId: event.id, leadId: lead?.id,
@@ -210,27 +272,14 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
 
     if (navigator.onLine) {
       try {
-        const ext  = blob.type.includes('mp4') ? 'mp4' : 'webm';
-        const path = `${event.id}/${slug}.${ext}`;
-        const { error: upErr } = await supabase.storage
-          .from('videos-processed')
-          .upload(path, blob, { contentType: blob.type, upsert: true });
-        
-        if (!upErr) {
-          const { data } = supabase.storage.from('videos-processed').getPublicUrl(path);
-          await (supabase.from('videos') as any).insert({
-            id: videoId, event_id: event.id, lead_id: null,
-            public_slug: slug, processed_video_url: data.publicUrl,
-            duration_seconds: duration, status: 'completed',
-            created_at: new Date().toISOString(),
-            processed_at: new Date().toISOString(),
-          });
-          const v = SpinDb.getVideos().find((x: any) => x.id === videoId);
-          if (v) SpinDb.saveVideo({ ...v, url: data.publicUrl, status: 'completed' });
-        } else {
-          console.error('Erro no upload do Supabase Storage:', upErr);
-        }
-      } catch (e) { console.error('Erro geral no fluxo de upload:', e); }
+        await UploadService.uploadVideo(event.id, videoId, slug, blob, duration);
+      } catch (e) {
+        LoggerService.error({
+          module: 'CameraRecorder',
+          action: 'background_upload',
+          error: e,
+        });
+      }
     }
   }, [event, lead, duration, cleanup, onRecordingComplete]);
 
@@ -240,8 +289,21 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
     const stream = streamRef.current;
     if (!canvas || !stream) return;
 
-    try { audioElRef.current?.play().catch((e) => console.error('Erro play musica:', e)); } 
-    catch (e) { console.error('Erro geral play musica:', e); }
+    try {
+      audioElRef.current?.play().catch((e) => {
+        LoggerService.error({
+          module: 'CameraRecorder',
+          action: 'startRecording_playMusic',
+          error: e,
+        });
+      });
+    } catch (e) {
+      LoggerService.error({
+        module: 'CameraRecorder',
+        action: 'startRecording_playMusic_general',
+        error: e,
+      });
+    }
 
     let recordStream = stream;
     try {
@@ -249,38 +311,23 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
       try {
         cs = (canvas as any).captureStream(30) as MediaStream;
       } catch (canvasErr) {
-        console.error('Erro de CORS/Segurança no Canvas:', canvasErr);
+        LoggerService.error({
+          module: 'CameraRecorder',
+          action: 'canvas_captureStream',
+          error: canvasErr,
+        });
       }
       
       let mixedAudioTracks: MediaStreamTrack[] = [];
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const mixer = audioMixerServiceRef.current;
 
-      // 4. Mixer nativo (Combina Microfone + Música)
-      if (AudioCtx) {
-        if (!audioCtxRef.current) audioCtxRef.current = new AudioCtx();
-        const actx = audioCtxRef.current;
-        const dest = actx.createMediaStreamDestination();
-
-        // Insere o microfone no Mixer
-        if (stream.getAudioTracks().length > 0) {
-          const micSource = actx.createMediaStreamSource(stream);
-          micSource.connect(dest);
-        }
-
-        // Insere a música no Mixer
+      if (mixer) {
+        mixer.createMixer();
+        mixer.connectMicrophone(stream);
         if (audioElRef.current) {
-          const audioEl = audioElRef.current as any;
-          if (!audioEl._sourceNode) {
-            audioEl._sourceNode = actx.createMediaElementSource(audioEl);
-          }
-          audioEl._sourceNode.connect(dest);
-          audioEl._sourceNode.connect(actx.destination); // Retorna a saída principal para ouvir
+          mixer.connectMusic(audioElRef.current);
         }
-
-        mixedAudioTracks = dest.stream.getAudioTracks();
-      } else {
-        // Fallback caso não suporte AudioContext (mantém o microfone)
-        mixedAudioTracks = stream.getAudioTracks();
+        mixedAudioTracks = mixer.getMixedTracks();
       }
 
       const videoTracks = cs && cs.getVideoTracks().length > 0 ? cs.getVideoTracks() : stream.getVideoTracks();
@@ -292,33 +339,34 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
       ]);
 
     } catch (e) {
-      console.error('Erro geral ao montar Mixer/Stream. Usando câmera pura:', e);
+      LoggerService.error({
+        module: 'CameraRecorder',
+        action: 'build_recordStream',
+        error: e,
+      });
     }
 
-    // 5. WebM priorizado (mais seguro em navegadores web e Android, cai pra MP4 se iOS forçar)
-    const mimeType = ['video/webm;codecs=vp9,opus', 'video/webm', 'video/mp4']
-      .find(t => MediaRecorder.isTypeSupported(t)) || '';
-
-    chunksRef.current = [];
-    const rec = new MediaRecorder(recordStream, {
-      ...(mimeType ? { mimeType } : {}),
-      videoBitsPerSecond: 2_500_000,
-      audioBitsPerSecond: 128_000,
+    recordingServiceRef.current?.startRecording(recordStream, (blob) => {
+      finish(blob);
     });
-    recorderRef.current = rec;
-    rec.ondataavailable = e => { if (e.data?.size > 0) chunksRef.current.push(e.data); };
-    rec.onstop = () => finish(new Blob(chunksRef.current, { type: mimeType || 'video/webm' }));
-    rec.start(200);
 
     setPhase('recording');
     setTimeLeft(duration);
 
-    let rem = duration;
-    timerRef.current = setInterval(() => {
-      rem -= 1;
+    // Sistema de Timer de precisão baseado em performance.now()
+    recordingStartTimeRef.current = performance.now();
+    const runTimer = () => {
+      if (recordingStartTimeRef.current === null) return;
+      const elapsed = Math.floor((performance.now() - recordingStartTimeRef.current) / 1000);
+      const rem = Math.max(0, duration - elapsed);
       setTimeLeft(rem);
-      if (rem <= 0) stopRecording();
-    }, 1000);
+      if (rem <= 0) {
+        stopRecording();
+      } else {
+        timerRef.current = setTimeout(runTimer, 100);
+      }
+    };
+    timerRef.current = setTimeout(runTimer, 100);
 
     safetyRef.current = setTimeout(() => stopRecording(), (duration + 3) * 1000);
   }, [duration, finish, stopRecording]);
@@ -330,14 +378,32 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
       audioElRef.current.play().then(() => {
         audioElRef.current?.pause();
         audioElRef.current!.currentTime = 0;
-      }).catch((e) => console.error('Erro ao destravar audio nativo:', e));
+      }).catch((e) => {
+        LoggerService.error({
+          module: 'CameraRecorder',
+          action: 'destravar_audio_nativo',
+          error: e,
+        });
+      });
     }
 
-    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-    if (AudioCtx && !audioCtxRef.current) {
-      audioCtxRef.current = new AudioCtx();
-      if (audioCtxRef.current.state === 'suspended') {
-        audioCtxRef.current.resume().catch((e:any) => console.error('Erro ao resumir AudioContext:', e));
+    const mixer = audioMixerServiceRef.current;
+    if (mixer) {
+      try {
+        mixer.createMixer();
+        mixer.resume().catch((e) => {
+          LoggerService.error({
+            module: 'CameraRecorder',
+            action: 'resume_mixer',
+            error: e,
+          });
+        });
+      } catch (e) {
+        LoggerService.error({
+          module: 'CameraRecorder',
+          action: 'startCountdown_mixer_setup',
+          error: e,
+        });
       }
     }
 
