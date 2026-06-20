@@ -62,8 +62,12 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
           if (url?.startsWith('http')) {
             const cached = await getAsset(`frame_${event.frameId}`, url);
             const img = new Image();
-            img.crossOrigin = 'anonymous';
-            await new Promise<void>((resolve) => {
+            // NÃO usar crossOrigin para data URLs — tainta o canvas no iOS/Chrome
+            if (!cached.startsWith('data:')) {
+              img.crossOrigin = 'anonymous';
+            }
+            await new Promise<void>(resolve => {
+              if (img.complete && img.naturalWidth > 0) { resolve(); return; }
               img.onload  = () => resolve();
               img.onerror = () => resolve();
               img.src = cached;
@@ -111,8 +115,16 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
       setError(null);
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user' },
-          audio: { echoCancellation: false, noiseSuppression: false },
+          video: {
+            facingMode: 'user',
+            width:  { ideal: 1080 },
+            height: { ideal: 1920 },
+          },
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl:  false,
+          },
         });
 
         if (cancelled) { stream.getTracks().forEach(t => t.stop()); return; }
@@ -266,26 +278,36 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
   }, [event, lead, onRecordingComplete, stopAll, uploadBackground]);
 
   // ─── Inicia gravação ───────────────────────────────────────────────────────
-  const startRecording = useCallback(() => {
+  const startRecording = useCallback(async () => {
     const canvas = canvasRef.current;
     const stream = streamRef.current;
     if (!canvas || !stream) return;
 
-    // ▶ Música toca pelo SPEAKER — microfone capta naturalmente
-    // Esse é o comportamento correto para totem de evento
+    // Inicia música ANTES de capturar — dá tempo do speaker emitir som
     if (audioElRef.current) {
-      audioElRef.current.volume = 0.85;
-      audioElRef.current.play().catch(() => {});
+      audioElRef.current.volume = 0.9;
+      try {
+        await audioElRef.current.play();
+        await new Promise(resolve => setTimeout(resolve, 300));
+      } catch (e) { console.warn('[Music]', e); }
     }
+
+    // Aguarda canvas ter ao menos alguns frames com moldura desenhada
+    await new Promise(resolve => setTimeout(resolve, 400));
 
     // ─ Vídeo: canvas com moldura embutida ─
     let videoTrack: MediaStreamTrack | null = null;
     try {
       const cs = (canvas as any).captureStream(30) as MediaStream;
       const vt = cs.getVideoTracks();
-      if (vt.length > 0) videoTrack = vt[0];
+      if (vt.length > 0 && vt[0].readyState === 'live') {
+        videoTrack = vt[0];
+        console.log('[Canvas] captureStream OK — frame será gravado no vídeo');
+      } else {
+        console.warn('[Canvas] captureStream sem tracks ativos');
+      }
     } catch (e) {
-      console.warn('[Canvas] captureStream indisponível:', e);
+      console.warn('[Canvas] captureStream falhou:', e);
     }
 
     // ─ Áudio: microfone direto da câmera (capta voz + música do ambiente) ─

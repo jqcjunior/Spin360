@@ -3,250 +3,158 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
-import { 
-  Download, Share2, RefreshCw, QrCode, CheckCircle, Copy, Check,
-  MessageCircle, Instagram, AlertTriangle, ArrowLeft, Send
-} from 'lucide-react';
+import React, { useState } from 'react';
+import { RotateCcw, QrCode, Share2 } from 'lucide-react';
 import { VideoRecord, Event } from '../types';
-import { SpinDb } from '../db';
 
-interface VideoPlaybackResultProps {
+interface Props {
   video: VideoRecord;
   event: Event;
   onRecordAgain: () => void;
 }
 
-export default function VideoPlaybackResult({ video, event, onRecordAgain }: VideoPlaybackResultProps) {
-  const [copied, setCopied] = useState(false);
-  const [downloadSuccess, setDownloadSuccess] = useState(false);
-  const [showShareModal, setShowShareModal] = useState(false);
-  const [selectedChannel, setSelectedChannel] = useState<string>('');
+export default function VideoPlaybackResult({ video, event, onRecordAgain }: Props) {
+  const [sharing, setSharing]   = useState(false);
+  const [shared, setShared]     = useState(false);
+  const [error, setError]       = useState('');
 
-  // Track page view count automatically
-  useEffect(() => {
-    SpinDb.registerView(video.id, navigator.userAgent);
-  }, [video.id]);
+  const isSupabaseUrl = video.url.startsWith('https://');
+  const shareUrl = `${window.location.origin}?v=${video.slug}`;
+  const qrUrl    = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(shareUrl)}&bgcolor=0f172a&color=ffffff&margin=10`;
 
-  const publicVideoUrl = `${window.location.origin}/video/${video.slug}`;
-
-  // Direct Mock Download Action (saves to downloads count and triggers client-side saving)
-  const handleDownload = async () => {
-    SpinDb.registerDownload(video.id);
-    setDownloadSuccess(true);
-    setTimeout(() => {
-      setDownloadSuccess(false);
-    }, 4000);
+  // ÚNICA função de compartilhamento — funciona no iPhone, Android e Desktop
+  const handleShare = async (channel?: string) => {
+    if (sharing) return;
+    setSharing(true);
+    setError('');
 
     try {
-      // Puxa o arquivo físico em formato Blob para forçar o download local
+      // Busca o vídeo como Blob
       const response = await fetch(video.url);
+      if (!response.ok) throw new Error('Erro ao carregar vídeo');
       const blob = await response.blob();
+      const file = new File([blob], `Real360_${video.slug}.mp4`, { type: 'video/mp4' });
+
+      // iOS/Android: usa gaveta nativa com o arquivo
+      // → usuário escolhe: Fotos, WhatsApp, AirDrop, etc.
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          title: `Meu vídeo no ${event.name}`,
+          text: 'Gravei esse vídeo na ativação Real 360°!',
+          files: [file],
+        });
+        setShared(true);
+        setTimeout(() => setShared(false), 3000);
+        return;
+      }
+
+      // Desktop: download direto
       const blobUrl = URL.createObjectURL(blob);
-      
-      const link = document.createElement('a');
-      link.href = blobUrl;
-      link.download = `Spin360_Video_${video.slug}.mp4`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      
-      // Limpa a memória
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-    } catch (error) {
-      // Fallback caso seja link externo bloqueado
-      const link = document.createElement('a');
-      link.href = video.url;
-      link.target = '_blank';
-      link.download = `Spin360_Video_${video.slug}.mp4`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `Real360_${video.slug}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 2000);
+      setShared(true);
+      setTimeout(() => setShared(false), 3000);
+
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        // Usuário cancelou a gaveta — não é erro
+        return;
+      }
+      // Se fetch falhou (blob URL expirou), tenta abrir URL diretamente
+      if (isSupabaseUrl) {
+        window.open(video.url, '_blank');
+      } else {
+        setError('Vídeo ainda sendo processado. Tente em alguns segundos.');
+      }
+    } finally {
+      setSharing(false);
     }
   };
-
-  const handleShare = (channel: 'whatsapp' | 'instagram' | 'facebook' | 'tiktok' | 'airdrop' | 'link' | 'qrcode' | 'other') => {
-    SpinDb.registerShare(video.id, channel);
-
-    if (channel === 'link') {
-      navigator.clipboard.writeText(publicVideoUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
-      return;
-    }
-
-    if (channel === 'whatsapp') {
-      const text = encodeURIComponent(`Veja meu vídeo do evento ${event.name}! Baixe aqui: ${publicVideoUrl}`);
-      window.open(`https://wa.me/?text=${text}`, '_blank');
-      return;
-    }
-
-    if (channel === 'instagram') {
-      navigator.clipboard.writeText(publicVideoUrl);
-      alert('Link copiado! Cole no Instagram Stories ou Direct.');
-      return;
-    }
-  };
-
-
-
-  const themeHex = event.themeColor || '#6366f1';
 
   return (
-    <div className="flex flex-col lg:flex-row items-stretch justify-center h-full max-w-5xl mx-auto gap-8 p-1 sm:p-4">
-      
-      {/* LEFT: Video Player Display Screen */}
-      <div className="flex-1 flex flex-col items-center justify-center">
-        
-        {/* Device frame block 9:16 format */}
-        <div className="relative w-full max-w-[350px] aspect-[9/16] bg-slate-950 rounded-[40px] border-[10px] border-slate-900 shadow-2xl overflow-hidden flex flex-col justify-between">
-          
-          {/* Top Notch */}
-          <div className="absolute top-0 inset-x-0 h-4 flex justify-center items-center z-40">
-            <div className="w-16 h-3.5 bg-slate-900 rounded-b-lg"></div>
-          </div>
+    <div className="max-w-sm mx-auto space-y-5 py-4 px-2 animate-fade-in">
 
-          {/* Core Video Elements */}
-          <div className="absolute inset-0 z-0 bg-slate-950">
-            <video 
-              src={video.url} 
-              autoPlay 
-              controls 
-              loop 
-              muted={false} // play music audio
-              className="w-full h-full object-cover"
-            />
-          </div>
-
-          {/* Success toast overlay */}
-          <div className="absolute top-10 inset-x-4 bg-emerald-950/90 border border-emerald-500/30 rounded-xl p-2 z-40 flex items-center gap-2 backdrop-blur-md">
-            <CheckCircle className="w-4 h-4 text-emerald-400 flex-none" />
-            <div className="text-[10px]">
-              <p className="font-bold text-white">Vídeo pronto com sucesso!</p>
-              <p className="text-emerald-300">Acelerações &amp; áudio mesclados.</p>
-            </div>
-          </div>
-
-          {/* Bottom layout labels inside screen frame */}
-          <div className="z-10 bg-gradient-to-t from-slate-950/90 to-transparent p-4 pt-12 text-white">
-            <div className="text-[10px] text-amber-500 font-mono tracking-wider mb-0.5">REAL 360° COMPLETED</div>
-            <p className="font-display font-medium text-xs leading-tight line-clamp-1">{event.name}</p>
-          </div>
+      {/* Preview do vídeo */}
+      <div className="rounded-3xl overflow-hidden bg-black aspect-[9/16] max-h-72 relative shadow-2xl">
+        <video
+          src={video.url}
+          autoPlay loop muted playsInline
+          className="w-full h-full object-cover"
+        />
+        <div className="absolute top-3 left-3 bg-emerald-600/90 backdrop-blur text-white text-[10px] font-bold font-mono px-3 py-1 rounded-full">
+          ✓ GRAVADO
         </div>
       </div>
 
-      {/* RIGHT: QR Code, Action Download and Social shares */}
-      <div className="w-full lg:w-[380px] bg-slate-900 border border-slate-800 rounded-3xl p-6 flex flex-col justify-between">
-        <div className="space-y-6">
-          
-          <div>
-            <span style={{ color: themeHex, backgroundColor: `${themeHex}20` }} className="text-[9px] font-mono font-bold tracking-widest px-2.5 py-1 rounded-md uppercase">
-              Download do Vídeo
-            </span>
-            <h2 className="text-xl font-display font-bold text-white mt-2 leading-snug">Seu registro está pronto!</h2>
-            <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-              Escaneie o QR Code abaixo no seu celular para visualizar e baixar instantaneamente, ou clique em baixar direto.
-            </p>
-          </div>
-
-          {/* QR Code real apontando para URL pública do vídeo */}
-          <div className="flex items-center gap-4 p-4 bg-slate-950 rounded-2xl border border-slate-800/80">
-            {(() => {
-              const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(publicVideoUrl)}&bgcolor=0f172a&color=ffffff&margin=8`;
-              return (
-                <img
-                  src={qrUrl}
-                  alt="QR Code do vídeo"
-                  className="w-28 h-28 rounded-xl border border-slate-700 flex-none"
-                />
-              );
-            })()}
-            <div className="flex-1 space-y-1.5">
-              <div className="text-[10px] font-mono text-indigo-400 font-bold uppercase tracking-wider flex items-center gap-1">
-                <QrCode className="w-3.5 h-3.5" /> Escaneie para baixar
-              </div>
-              <p className="text-[11px] text-slate-300 leading-snug">
-                Aponte a câmera do celular para baixar o vídeo
-              </p>
-              <span className="text-[10px] bg-slate-900 border border-slate-800 text-slate-400 p-1.5 rounded font-mono inline-block w-full truncate">
-                {publicVideoUrl}
-              </span>
-            </div>
-          </div>
-
-          {/* ACTION BUTTONS DIRECT */}
-          <div className="space-y-2">
-            <button
-              onClick={handleDownload}
-              style={{ backgroundColor: themeHex }}
-              className="w-full py-3.5 rounded-2xl hover:bg-opacity-90 font-display font-bold tracking-wide text-sm text-white flex items-center justify-center gap-2 cursor-pointer shadow-lg transition-transform hover:scale-[1.01] active:scale-95">
-              <Download className="w-4.5 h-4.5" />
-              <span>{downloadSuccess ? 'Baixando seu Arquivo...' : 'BAIXAR AGORA (MP4)'}</span>
-            </button>
-
-            {downloadSuccess && (
-              <p className="text-center text-[10px] text-emerald-400 font-mono animate-pulse">
-                ✓ Registro de download salvo. Verifique sua pasta de downloads.
-              </p>
-            )}
-
-            {/* Quick social sharing horizontal bar */}
-            <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-3 space-y-2">
-              <span className="text-[9px] font-mono text-slate-500 block uppercase text-center font-bold">COMPARTILHAR / ENVIAR</span>
-
-              <button
-                onClick={async () => {
-                  SpinDb.registerShare(video.id, 'airdrop');
-                  if (navigator.share) {
-                    try {
-                      await navigator.share({
-                        title: `Meu vídeo — ${event.name}`,
-                        url: publicVideoUrl,
-                      });
-                    } catch (_) {}
-                  } else {
-                    navigator.clipboard.writeText(publicVideoUrl);
-                    alert('Link copiado! Compartilhe como preferir.');
-                  }
-                }}
-                className="w-full py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors">
-                <Share2 className="w-4 h-4" /> AirDrop / Compartilhar
-              </button>
-
-              <div className="grid grid-cols-3 gap-1.5 text-[10px]">
-                <button
-                  onClick={() => handleShare('whatsapp')}
-                  className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 flex flex-col items-center gap-1 cursor-pointer text-slate-300">
-                  <MessageCircle className="w-4 h-4 text-emerald-500" />
-                  <span>WhatsApp</span>
-                </button>
-                <button
-                  onClick={() => handleShare('instagram')}
-                  className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 flex flex-col items-center gap-1 cursor-pointer text-slate-300">
-                  <Instagram className="w-4 h-4 text-pink-500" />
-                  <span>Instagram</span>
-                </button>
-                <button
-                  onClick={() => handleShare('link')}
-                  className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 flex flex-col items-center gap-1 cursor-pointer text-slate-300">
-                  {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4 text-indigo-400" />}
-                  <span>{copied ? 'Copiado!' : 'Copiar Link'}</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-6 pt-4 border-t border-slate-800/80 flex flex-col gap-2">
-          {/* Record Again */}
-          <button
-            onClick={onRecordAgain}
-            className="w-full py-2.5 text-center bg-slate-800 hover:bg-slate-700/80 border border-slate-700 text-white rounded-xl font-medium text-xs transition-colors cursor-pointer flex items-center justify-center gap-1.5">
-            <RefreshCw className="w-4.5 h-4.5 text-emerald-400" />
-            <span>Gravar Outro Vídeo</span>
-          </button>
-        </div>
+      {/* Info */}
+      <div className="text-center space-y-0.5">
+        <h3 className="text-white font-bold text-lg leading-tight">{event.name}</h3>
+        <p className="text-slate-500 text-[10px] font-mono">ID: {video.slug}</p>
       </div>
+
+      {/* QR Code — só aparece quando tem URL permanente */}
+      {isSupabaseUrl && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col items-center gap-2">
+          <div className="flex items-center gap-1.5 text-[10px] font-mono text-slate-400">
+            <QrCode className="w-3.5 h-3.5 text-indigo-400" />
+            Aponte a câmera em outro dispositivo para baixar
+          </div>
+          <img src={qrUrl} alt="QR Code" className="w-40 h-40 rounded-xl" />
+          <p className="text-[10px] text-slate-600 font-mono break-all text-center">{shareUrl}</p>
+        </div>
+      )}
+
+      {!isSupabaseUrl && (
+        <div className="bg-amber-900/20 border border-amber-700/30 rounded-2xl p-3 text-center">
+          <p className="text-amber-400 text-xs font-mono">⏳ Sincronizando com a nuvem...</p>
+          <p className="text-amber-500/60 text-[10px] font-mono mt-1">QR Code disponível em instantes</p>
+        </div>
+      )}
+
+      {/* BOTÃO PRINCIPAL — Salvar / Compartilhar */}
+      <button
+        onClick={() => handleShare()}
+        disabled={sharing}
+        className="w-full py-5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-90 disabled:opacity-60 rounded-2xl font-bold text-white text-lg flex flex-col items-center justify-center gap-1 shadow-xl cursor-pointer transition-all active:scale-95">
+        {sharing ? (
+          <>
+            <div className="w-6 h-6 border-3 border-white border-t-transparent rounded-full animate-spin" />
+            <span className="text-sm">Carregando vídeo...</span>
+          </>
+        ) : shared ? (
+          <>
+            <span className="text-2xl">✓</span>
+            <span className="text-sm">Pronto!</span>
+          </>
+        ) : (
+          <>
+            <Share2 className="w-7 h-7" />
+            <span>Salvar / Compartilhar Vídeo</span>
+            <span className="text-xs opacity-70 font-normal">Fotos · WhatsApp · AirDrop · e mais</span>
+          </>
+        )}
+      </button>
+
+      {/* Mensagem de erro */}
+      {error && (
+        <p className="text-red-400 text-xs font-mono text-center bg-red-950/30 border border-red-900/30 rounded-xl px-3 py-2">
+          ⚠ {error}
+        </p>
+      )}
+
+      {/* Gravar novamente */}
+      <button
+        onClick={onRecordAgain}
+        className="w-full py-3 rounded-2xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 text-sm flex items-center justify-center gap-2 font-mono cursor-pointer transition-colors">
+        <RotateCcw className="w-4 h-4" />
+        Gravar Novamente
+      </button>
+
     </div>
   );
 }
