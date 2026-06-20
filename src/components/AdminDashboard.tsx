@@ -107,6 +107,24 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
   // Modals / Form states
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<Event | null>(null);
+  const [savingEvent, setSavingEvent] = useState(false);
+  const [editingEventId, setEditingEventId] = useState<string | null>(null);
+
+  const generateUUID = () => {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+      const r = Math.random() * 16 | 0;
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  };
+
+  const setShowEventForm = (open: boolean) => {
+    setIsEventModalOpen(open);
+    if (!open) {
+      setEditingEventId(null);
+      setEditingEvent(null);
+    }
+  };
 
   // States for dynamic Frame, Track, Sponsor Creators
   const [isFrameModalOpen, setIsFrameModalOpen] = useState(false);
@@ -212,71 +230,94 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
   const presetThemes = ['#6366f1', '#ca8a04', '#ef4444', '#d946ef', '#10b981', '#06b6d4'];
 
   // Handle Event create/edit submission
-  const handleEventSave = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleEventSave = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const evtDescription = evtDesc;
+    const evtTotemMode = evtTotem;
+    const evtLeadCapture = evtLeads;
 
-    if (!evtFrameId) {
-      alert("Aviso: Um evento ativo necessita de uma Moldura vinculada.");
-      return;
-    }
+    if (savingEvent) return; // Bloqueia duplo clique
+    if (!evtName.trim()) { alert('Nome do evento é obrigatório.'); return; }
 
-    const eventData: Event = {
-      id: editingEvent ? editingEvent.id : 'evt_' + Math.floor(Math.random() * 1000000),
-      name: evtName,
-      description: evtDesc,
-      date: evtDate,
-      time: evtTime,
-      coverUrl: evtCover || 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=600&auto=format&fit=crop&q=60',
-      status: evtStatus,
-      category: evtCategory,
-      frameId: evtFrameId,
-      musicId: evtMusicId || undefined,
-      sponsorIds: evtSponsorIds,
-      sponsorsConfig: evtSponsorConfigs,
-      videoDuration: evtDuration,
-      effectPresetId: evtEffectId,
-      themeColor: evtColor,
-      enableTotemMode: evtTotem,
-      enableLeadCapture: evtLeads,
-      requiredLeadFields: evtLeadFields,
-      lgpdConsentText: evtLgpdText,
-      createdAt: editingEvent ? editingEvent.createdAt : new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+    setSavingEvent(true);
 
-    SpinDb.saveEvent(eventData);
+    const eventId = editingEventId && editingEventId.length === 36
+      ? editingEventId
+      : generateUUID();
 
-    // Salva no Supabase com frame_id e music_id válidos (UUID do Supabase)
+    const frameUuid = evtFrameId?.length === 36 ? evtFrameId : null;
+    const musicUuid = evtMusicId?.length === 36 ? evtMusicId : null;
+
     try {
-      const frameUuid = eventData.frameId?.length === 36 ? eventData.frameId : null;
-      const musicUuid = eventData.musicId?.length === 36 ? eventData.musicId : null;
-      
-      await supabase.from('events').upsert({
-        id: eventData.id?.length === 36 ? eventData.id : undefined,
-        name: eventData.name,
-        description: eventData.description || null,
-        status: eventData.status,
-        category: eventData.category || 'Geral',
+      const payload: any = {
+        id: eventId,
+        name: evtName.trim(),
+        description: evtDescription?.trim() || null,
+        event_date: evtDate || null,
+        event_time: evtTime || null,
+        cover_image_url: evtCover || null,
+        status: evtStatus || 'active',
+        category: evtCategory || 'Geral',
         frame_id: frameUuid,
         music_id: musicUuid,
-        video_duration_seconds: eventData.videoDuration,
-        theme_color: eventData.themeColor || '#6366f1',
-        totem_mode_enabled: eventData.enableTotemMode || false,
-        lead_capture_config: { enabled: eventData.enableLeadCapture, fields: eventData.requiredLeadFields },
-        created_at: eventData.createdAt,
+        video_duration_seconds: Number(evtDuration) || 10,
+        theme_color: evtColor || '#6366f1',
+        totem_mode_enabled: evtTotemMode ?? true,
+        lead_capture_config: {
+          enabled: evtLeadCapture ?? false,
+          fields: evtLeadFields || {},
+          lgpd_text: evtLgpdText || 'Autorizo a captação dos meus dados.',
+        },
         updated_at: new Date().toISOString(),
-      } as any);
-      console.log('[Admin] Evento salvo no Supabase:', eventData.name);
-    } catch (err) {
-      console.error('[Admin] Erro Supabase:', err);
+      };
+
+      if (!editingEventId) {
+        payload.created_at = new Date().toISOString();
+      }
+
+      const { error } = await supabase.from('events').upsert(payload, { onConflict: 'id' });
+      if (error) throw error;
+
+      // Também atualiza o SpinDb local para sincronização instantânea
+      const eventData: Event = {
+        id: eventId,
+        name: payload.name,
+        description: payload.description || '',
+        date: evtDate,
+        time: evtTime,
+        coverUrl: payload.cover_image_url || 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=600&auto=format&fit=crop&q=60',
+        status: payload.status,
+        category: payload.category,
+        frameId: evtFrameId,
+        musicId: evtMusicId || undefined,
+        sponsorIds: evtSponsorIds,
+        sponsorsConfig: evtSponsorConfigs,
+        videoDuration: payload.video_duration_seconds as any,
+        effectPresetId: evtEffectId,
+        themeColor: payload.theme_color,
+        enableTotemMode: payload.totem_mode_enabled,
+        enableLeadCapture: payload.lead_capture_config.enabled,
+        requiredLeadFields: payload.lead_capture_config.fields,
+        lgpdConsentText: payload.lead_capture_config.lgpd_text,
+        createdAt: !editingEventId ? payload.created_at : (editingEvent?.createdAt || new Date().toISOString()),
+        updatedAt: payload.updated_at
+      };
+      SpinDb.saveEvent(eventData);
+
+      setEditingEventId(null);
+      setShowEventForm(false);
+      triggerReload();
+
+    } catch (err: any) {
+      alert('Erro ao salvar: ' + (err.message || 'Tente novamente.'));
+    } finally {
+      setSavingEvent(false);
     }
-    setIsEventModalOpen(false);
-    setEditingEvent(null);
-    triggerReload();
   };
 
   const openEventCreate = () => {
     setEditingEvent(null);
+    setEditingEventId(null);
     setEvtName('');
     setEvtDesc('');
     setEvtDate(new Date().toISOString().substring(0, 10));
@@ -302,6 +343,7 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
 
   const openEventEdit = (event: Event) => {
     setEditingEvent(event);
+    setEditingEventId(event.id);
     setEvtName(event.name);
     setEvtDesc(event.description);
     setEvtDate(event.date);
@@ -1227,7 +1269,7 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
                 {editingEvent ? '📝 Editar Configuração de Evento' : '✨ Criar Novo Evento Promocional'}
               </h3>
               <button 
-                onClick={() => setIsEventModalOpen(false)}
+                onClick={() => setShowEventForm(false)}
                 className="text-slate-400 hover:text-white font-mono text-xs p-1">
                 Fechar
               </button>
@@ -1461,13 +1503,16 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
               </details>
 
               <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => setIsEventModalOpen(false)}
+                <button type="button" onClick={() => setShowEventForm(false)}
                   className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl font-bold font-mono text-xs">
                   Cancelar
                 </button>
-                <button type="submit"
-                  className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-bold font-mono text-xs shadow-lg">
-                  {editingEvent ? 'Salvar Alterações' : 'Criar Evento'}
+                <button
+                  type="submit"
+                  onClick={handleEventSave}
+                  disabled={savingEvent}
+                  className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-bold font-mono text-xs shadow-lg disabled:opacity-50">
+                  {savingEvent ? 'Salvando...' : 'Salvar Evento'}
                 </button>
               </div>
 
