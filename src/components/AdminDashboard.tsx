@@ -12,7 +12,8 @@ import {
 import { 
   LayoutDashboard, Calendar, Image, Music, Users, ShieldAlert, Settings, FileSpreadsheet,
   Plus, Edit, Trash2, ShieldCheck, Check, Info, ToggleLeft, ToggleRight,
-  Database, RefreshCw, Eye, Download, Share2, HelpCircle, AlertCircle, Sparkles
+  Database, RefreshCw, Eye, Download, Share2, HelpCircle, AlertCircle, Sparkles,
+  Loader2
 } from 'lucide-react';
 import { 
   Event, Frame, Sponsor, MusicTrack, EffectPreset, EventStatus, 
@@ -26,7 +27,20 @@ interface AdminDashboardProps {
 }
 
 export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'stats' | 'events' | 'frames' | 'tracks' | 'sponsors' | 'leads' | 'audits' | 'settings'>('stats');
+  const [activeTab, setActiveTab] = useState<'stats' | 'events' | 'frames' | 'tracks' | 'sponsors' | 'leads' | 'audits' | 'settings' | 'usuarios'>('stats');
+  const activeSection = activeTab;
+  const setActiveSection = setActiveTab;
+
+  const [userRole, setUserRole] = useState<string>('operador');
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      const role = data.user?.user_metadata?.role || 'operador';
+      setUserRole(role);
+    });
+  }, []);
+
+  const isAdmin = userRole === 'administrador';
 
   // Trigger Database reloads
   const [dbTick, setDbTick] = useState(0);
@@ -35,30 +49,33 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
 
   useEffect(() => {
     const loadCatalog = async () => {
-      const { data: framesData } = await supabase.from('frames').select('id, name, image_url, tags, is_active').eq('is_active', true);
-      const { data: tracksData } = await supabase.from('music_tracks').select('id, name, file_url, volume, fade_in_seconds, fade_out_seconds, is_loop, start_point_seconds').eq('is_active', true);
+      const { data: framesData } = await supabase
+        .from('frames').select('*').eq('is_active', true).order('created_at');
+      const { data: tracksData } = await supabase
+        .from('music_tracks').select('*').eq('is_active', true).order('created_at');
 
       if (framesData) {
-        const mapped = framesData.map((f: any) => ({
-          id: f.id, name: f.name, imageUrl: f.image_url,
-          category: 'Geral', tags: f.tags || [], isActive: true,
-          createdAt: new Date().toISOString(),
-        }));
-        setSupabaseFrames(mapped);
-        mapped.forEach(f => SpinDb.saveFrame(f));
+         const mapped = framesData.map((f: any) => ({
+           id: f.id, name: f.name, imageUrl: f.image_url,
+           category: 'Geral', tags: f.tags || [], isActive: f.is_active,
+           createdAt: f.created_at,
+         }));
+         setSupabaseFrames(mapped);
+         mapped.forEach(f => SpinDb.saveFrame(f));
       }
 
       if (tracksData) {
-        const mapped = tracksData.map((t: any) => ({
-          id: t.id, title: t.name, artist: '', audioUrl: t.file_url,
-          volume: t.volume || 0.8, fadeIn: t.fade_in_seconds || 1,
-          fadeOut: t.fade_out_seconds || 1, loop: t.is_loop || true,
-          startPoint: t.start_point_seconds || 0, endPoint: 30,
-          createdAt: new Date().toISOString(),
-        }));
-        setSupabaseTracks(mapped);
-        mapped.forEach(t => SpinDb.saveMusicTrack(t));
+         const mapped = tracksData.map((t: any) => ({
+           id: t.id, title: t.name, artist: '', audioUrl: t.file_url,
+           volume: t.volume || 0.8, fadeIn: t.fade_in_seconds || 1,
+           fadeOut: t.fade_out_seconds || 1, loop: t.is_loop !== false,
+           startPoint: t.start_point_seconds || 0, endPoint: 30,
+           createdAt: t.created_at,
+         }));
+         setSupabaseTracks(mapped);
+         mapped.forEach(t => SpinDb.saveMusicTrack(t));
       }
+      triggerReload();
     };
     loadCatalog();
   }, []);
@@ -295,16 +312,35 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
   };
 
   const handleDeleteEvent = async (id: string) => {
-    if (confirm("Deseja realmente excluir este evento? Todos os logs do evento serão mantidos para auditoria.")) {
-      SpinDb.deleteEvent(id);
-      try {
-        const { supabase } = await import('../lib/supabase');
-        await supabase.from('events').delete().eq('id', id);
-      } catch (err) {
-        console.error('[AdminDashboard] Erro ao deletar evento no Supabase:', err);
-      }
-      triggerReload();
+    if (!confirm('Excluir este evento?')) return;
+    await supabase.from('events').delete().eq('id', id);
+    SpinDb.deleteEvent(id);
+    triggerReload();
+  };
+
+  const handleDeleteFrame = async (id: string, imageUrl: string) => {
+    if (!confirm('Excluir esta moldura?')) return;
+    // Remove do banco
+    await supabase.from('frames').delete().eq('id', id);
+    // Remove do Storage se for URL do Supabase
+    if (imageUrl?.includes('supabase.co')) {
+      const path = imageUrl.split('/storage/v1/object/public/frames/')[1];
+      if (path) await supabase.storage.from('frames').remove([path]);
     }
+    // Remove do cache local
+    SpinDb.deleteFrame(id);
+    triggerReload();
+  };
+
+  const handleDeleteTrack = async (id: string, fileUrl: string) => {
+    if (!confirm('Excluir esta música?')) return;
+    await supabase.from('music_tracks').delete().eq('id', id);
+    if (fileUrl?.includes('supabase.co')) {
+      const path = fileUrl.split('/storage/v1/object/public/music/')[1];
+      if (path) await supabase.storage.from('music').remove([path]);
+    }
+    SpinDb.deleteMusicTrack(id);
+    triggerReload();
   };
 
   // Switch event status helper
@@ -559,6 +595,15 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
               <span>Preferências</span>
             </button>
           </li>
+
+          <li>
+            <button
+              onClick={() => setActiveSection('usuarios')}
+              className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-mono transition-all cursor-pointer ${activeSection === 'usuarios' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>
+              <Users className="w-3.5 h-3.5" />
+              Usuários & Acesso
+            </button>
+          </li>
         </ul>
 
         {/* System telemetry label block */}
@@ -580,6 +625,12 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
 
       {/* CORE ACTIVE WORKSPACE */}
       <div className="flex-1 bg-slate-900 border border-slate-800 rounded-3xl p-6 min-h-[500px]">
+        {!isAdmin && (
+          <div className="bg-amber-900/20 border border-amber-700/30 rounded-xl px-4 py-2.5 flex items-center gap-2 text-amber-400 text-xs font-mono mb-4">
+            <ShieldCheck className="w-4 h-4" />
+            Você está no modo <strong>Operador</strong> — visualização apenas. Edição e exclusão disponíveis somente para administradores.
+          </div>
+        )}
         {activeTab === 'stats' && (
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
@@ -745,11 +796,13 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
                 </h2>
                 <p className="text-xs text-slate-400">Publique novos templates de totem, acione captura de leads e configure overlays.</p>
               </div>
-              <button 
-                onClick={openEventCreate}
-                className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-xl text-xs font-bold font-mono tracking-wider flex items-center gap-1.5 shadow-lg shadow-indigo-950/25">
-                <Plus className="w-4 h-4" /> NOVO EVENTO
-              </button>
+              {isAdmin && (
+                <button 
+                  onClick={openEventCreate}
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-xl text-xs font-bold font-mono tracking-wider flex items-center gap-1.5 shadow-lg shadow-indigo-950/25">
+                  <Plus className="w-4 h-4" /> NOVO EVENTO
+                </button>
+              )}
             </div>
 
             {/* Event List table cards layout */}
@@ -790,24 +843,28 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
                       </div>
                       
                       <div className="flex items-center gap-1">
-                        <button 
-                          onClick={() => toggleStatus(e)}
-                          title="Alterar Status"
-                          className="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-mono cursor-pointer">
-                          Alterar status
-                        </button>
-                        <button 
-                          onClick={() => openEventEdit(e)}
-                          className="p-1 bg-slate-850 hover:bg-slate-700 text-teal-400 rounded cursor-pointer"
-                          title="Editar Evento">
-                          <Edit className="w-3.5 h-3.5" />
-                        </button>
-                        <button 
-                          onClick={() => handleDeleteEvent(e.id)}
-                          className="p-1 bg-slate-850 hover:bg-red-950 text-red-400 rounded cursor-pointer"
-                          title="Excluir Evento">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {isAdmin && (
+                          <>
+                            <button 
+                              onClick={() => toggleStatus(e)}
+                              title="Alterar Status"
+                              className="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-mono cursor-pointer">
+                              Alterar status
+                            </button>
+                            <button 
+                              onClick={() => openEventEdit(e)}
+                              className="p-1 bg-slate-850 hover:bg-slate-700 text-teal-400 rounded cursor-pointer"
+                              title="Editar Evento">
+                              <Edit className="w-3.5 h-3.5" />
+                            </button>
+                            <button 
+                              onClick={() => handleDeleteEvent(e.id)}
+                              className="p-1 bg-slate-850 hover:bg-red-950 text-red-400 rounded cursor-pointer"
+                              title="Excluir Evento">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        )}
                         
                         {e.status === 'active' && (
                           <button 
@@ -836,11 +893,13 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
                 </h2>
                 <p className="text-xs text-slate-400">Carregue novos overlays de enquadramento 9:16 (formato stories de gravação).</p>
               </div>
-              <button 
-                onClick={() => setIsFrameModalOpen(true)}
-                className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-xl text-xs font-bold font-mono tracking-wider flex items-center gap-1.5 shadow-lg">
-                <Plus className="w-4 h-4" /> ADICIONAR MOLDURA
-              </button>
+              {isAdmin && (
+                <button 
+                  onClick={() => setIsFrameModalOpen(true)}
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-xl text-xs font-bold font-mono tracking-wider flex items-center gap-1.5 shadow-lg">
+                  <Plus className="w-4 h-4" /> ADICIONAR MOLDURA
+                </button>
+              )}
             </div>
 
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -872,16 +931,13 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
                     <h4 className="text-white text-xs font-bold truncate mt-0.5">{f.name}</h4>
                     <div className="flex gap-1 mt-2.5 justify-between">
                       <span className="text-[9px] bg-slate-800 text-slate-400 font-mono p-1 rounded">SVG de Alta</span>
-                      <button 
-                        onClick={() => {
-                          if(confirm("Deseja deletar esta moldura?")) {
-                            SpinDb.deleteFrame(f.id);
-                            triggerReload();
-                          }
-                        }}
-                        className="text-red-400 hover:text-red-300 text-[10px] font-mono">
-                        Excluir
-                      </button>
+                      {isAdmin && (
+                        <button 
+                          onClick={() => handleDeleteFrame(f.id, f.imageUrl)}
+                          className="text-red-400 hover:text-red-300 text-[10px] font-mono cursor-pointer">
+                          Excluir
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -900,11 +956,13 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
                 </h2>
                 <p className="text-xs text-slate-400">Configure arquivos de áudio que são mesclados ao vídeo bruto com loops e fade-ins.</p>
               </div>
-              <button 
-                onClick={() => setIsTrackModalOpen(true)}
-                className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-xl text-xs font-bold font-mono tracking-wider flex items-center gap-1.5 shadow-lg">
-                <Plus className="w-4 h-4" /> NOVO ÁUDIO
-              </button>
+              {isAdmin && (
+                <button 
+                  onClick={() => setIsTrackModalOpen(true)}
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-xl text-xs font-bold font-mono tracking-wider flex items-center gap-1.5 shadow-lg">
+                  <Plus className="w-4 h-4" /> NOVO ÁUDIO
+                </button>
+              )}
             </div>
 
             <div className="bg-slate-950 rounded-2xl border border-slate-850 overflow-hidden">
@@ -931,16 +989,13 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
                         {t.startPoint}s - {t.endPoint}s ({t.endPoint - t.startPoint}s)
                       </td>
                       <td className="p-3 text-right">
-                        <button 
-                          onClick={() => {
-                            if(confirm("Deseja deletar esta trilha?")) {
-                              SpinDb.deleteMusicTrack(t.id);
-                              triggerReload();
-                            }
-                          }}
-                          className="text-red-500 hover:text-red-400 font-mono text-[11px] cursor-pointer">
-                          Excluir
-                        </button>
+                        {isAdmin && (
+                          <button 
+                            onClick={() => handleDeleteTrack(t.id, t.audioUrl)}
+                            className="text-red-500 hover:text-red-400 font-mono text-[11px] cursor-pointer">
+                            Excluir
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -1147,6 +1202,8 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
             </div>
           </div>
         )}
+
+        {activeSection === 'usuarios' && <UserManagementSection />}
       </div>
 
       {/* CREATE/EDIT EVENT MODAL (DURABLE & FULL PROPERTIES) */}
@@ -1600,6 +1657,135 @@ export default function AdminDashboard({ onSelectEventForCapture }: AdminDashboa
         </div>
       )}
 
+    </div>
+  );
+}
+
+function UserManagementSection() {
+  const [requests, setRequests] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [approving, setApproving] = useState<string | null>(null);
+  const [result, setResult] = useState<{ email: string; pass: string; role: string } | null>(null);
+
+  const load = async () => {
+    const { data } = await supabase.from('user_requests').select('*').order('created_at', { ascending: false });
+    setRequests(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const handleApprove = async (id: string, role: string) => {
+    setApproving(id);
+    try {
+      const { data, error } = await supabase.rpc('approve_user_request', {
+        request_id: id,
+        assigned_role: role,
+      });
+      if (error) throw error;
+      setResult({ email: data.email, pass: data.temp_password, role: data.role });
+      load();
+    } catch (e: any) {
+      alert('Erro: ' + e.message);
+    } finally {
+      setApproving(null);
+    }
+  };
+
+  const handleReject = async (id: string) => {
+    await supabase.rpc('reject_user_request', { request_id: id });
+    load();
+  };
+
+  const statusColor: Record<string, string> = {
+    pending: 'text-amber-400 bg-amber-900/30 border-amber-700/30',
+    approved: 'text-emerald-400 bg-emerald-900/30 border-emerald-700/30',
+    rejected: 'text-red-400 bg-red-900/30 border-red-700/30',
+  };
+
+  const statusLabel: Record<string, string> = {
+    pending: 'Pendente', approved: 'Aprovado', rejected: 'Rejeitado'
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-white text-xl font-display font-bold">Usuários & Acesso</h2>
+        <p className="text-slate-400 text-xs mt-1">Gerencie solicitações de acesso ao sistema.</p>
+      </div>
+
+      {result && (
+        <div className="bg-emerald-900/20 border border-emerald-700/30 rounded-2xl p-4 space-y-2">
+          <p className="text-emerald-400 font-bold text-sm">✅ Usuário aprovado! Compartilhe as credenciais abaixo:</p>
+          <div className="bg-slate-950 rounded-xl p-3 font-mono text-xs space-y-1">
+            <p className="text-white">Email: <span className="text-indigo-400">{result.email}</span></p>
+            <p className="text-white">Senha temporária: <span className="text-amber-400">{result.pass}</span></p>
+            <p className="text-white">Papel: <span className="text-indigo-400">{result.role}</span></p>
+          </div>
+          <p className="text-slate-500 text-[10px]">⚠ Anote a senha — ela não será exibida novamente.</p>
+          <button onClick={() => setResult(null)} className="text-xs text-slate-400 hover:text-white font-mono cursor-pointer">Fechar</button>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="text-center py-12">
+          <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto" />
+        </div>
+      ) : requests.length === 0 ? (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center">
+          <p className="text-slate-500 text-xs font-mono">Nenhuma solicitação de acesso ainda.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {requests.map(req => (
+            <div key={req.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="text-white font-bold text-sm">{req.name}</p>
+                  <p className="text-slate-400 text-xs font-mono">{req.email}</p>
+                  {req.message && <p className="text-slate-500 text-xs mt-1 italic">"{req.message}"</p>}
+                </div>
+                <span className={`text-[10px] font-mono font-bold px-2 py-1 rounded-lg border ${statusColor[req.status] || ''}`}>
+                  {statusLabel[req.status] || req.status}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2 text-[10px] font-mono text-slate-500">
+                <span>Solicitou: {req.role_requested}</span>
+                <span>•</span>
+                <span>{new Date(req.created_at).toLocaleDateString('pt-BR')}</span>
+              </div>
+
+              {req.status === 'pending' && (
+                <div className="flex gap-2 pt-1">
+                  <select
+                    id={`role_${req.id}`}
+                    defaultValue={req.role_requested}
+                    className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-indigo-500">
+                    <option value="operador">Operador</option>
+                    <option value="administrador">Administrador</option>
+                  </select>
+                  <button
+                    onClick={() => {
+                      const sel = document.getElementById(`role_${req.id}`) as HTMLSelectElement;
+                      handleApprove(req.id, sel.value);
+                    }}
+                    disabled={approving === req.id}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold rounded-xl cursor-pointer flex items-center gap-1">
+                    {approving === req.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                    Aprovar
+                  </button>
+                  <button
+                    onClick={() => handleReject(req.id)}
+                    className="px-3 py-2 bg-red-900/40 hover:bg-red-900/60 text-red-400 text-xs font-bold rounded-xl cursor-pointer border border-red-800/30">
+                    Rejeitar
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

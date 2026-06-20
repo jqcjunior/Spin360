@@ -5,7 +5,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { ShieldCheck, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { ShieldCheck, Eye, EyeOff, Loader2, UserPlus } from 'lucide-react';
+import RequestAccessModal from './RequestAccessModal';
 
 interface AuthGuardProps {
   children: React.ReactNode;
@@ -19,6 +20,7 @@ export default function AuthGuard({ children }: AuthGuardProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [signing, setSigning] = useState(false);
+  const [showRequestModal, setShowRequestModal] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -117,6 +119,15 @@ export default function AuthGuard({ children }: AuthGuardProps) {
             {signing ? 'Entrando...' : 'Entrar no Painel'}
           </button>
         </div>
+
+        <button
+          onClick={() => setShowRequestModal(true)}
+          className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white text-xs font-mono rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-colors">
+          <UserPlus className="w-3.5 h-3.5" />
+          Solicitar acesso ao sistema
+        </button>
+
+        {showRequestModal && <RequestAccessModal onClose={() => setShowRequestModal(false)} />}
 
         <p className="text-center text-[10px] text-slate-600 font-mono">
           realspin360.click — ArtTech © 2026
