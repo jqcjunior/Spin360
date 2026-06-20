@@ -323,7 +323,6 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
 
     const recordStream = new MediaStream(tracks);
 
-    // Escolhe o melhor codec disponível
     const mimeType = [
       'video/mp4;codecs=h264,aac',
       'video/webm;codecs=vp9,opus',
@@ -331,12 +330,17 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
       'video/webm',
     ].find(t => MediaRecorder.isTypeSupported(t)) || '';
 
-    chunksRef.current = [];
-    const recorder = new MediaRecorder(recordStream, {
+    const recorderOptions: MediaRecorderOptions = {
       ...(mimeType ? { mimeType } : {}),
-      videoBitsPerSecond: 2_500_000,
-      audioBitsPerSecond: 128_000,
-    });
+      videoBitsPerSecond: 2_500_000,  // 2.5 Mbps — boa qualidade, tamanho controlado
+      audioBitsPerSecond: 128_000,    // 128 kbps — qualidade de podcast
+    };
+
+    chunksRef.current = [];
+    const recorder = new MediaRecorder(
+      streamRef.current!,
+      recorderOptions
+    );
 
     recorderRef.current = recorder;
     recorder.ondataavailable = e => { if (e.data?.size > 0) chunksRef.current.push(e.data); };
