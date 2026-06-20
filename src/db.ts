@@ -448,7 +448,7 @@ export const SEED_VIDEOS: VideoRecord[] = [
     slug: 'e8g4b',
     eventId: 'evt_cyber_night',
     leadId: 'lead_01',
-    url: 'https://assets.mixkit.co/videos/preview/mixkit-girl-dancing-with-neon-lights-42289-large.mp4', // beautiful high resolution stock dancing video
+    url: '', // <-- URL limpa (Sem Mixkit)
     thumbnailUrl: 'https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=300&auto=format&fit=crop&q=60',
     duration: 10,
     status: 'completed',
@@ -465,7 +465,7 @@ export const SEED_VIDEOS: VideoRecord[] = [
     slug: 'j5k2w',
     eventId: 'evt_cyber_night',
     leadId: 'lead_02',
-    url: 'https://assets.mixkit.co/videos/preview/mixkit-young-woman-with-neon-makeup-dancing-31620-large.mp4',
+    url: '', // <-- URL limpa (Sem Mixkit)
     thumbnailUrl: 'https://images.unsplash.com/photo-1508214751196-bcfd4ca60f91?w=300&auto=format&fit=crop&q=60',
     duration: 10,
     status: 'completed',
@@ -482,7 +482,7 @@ export const SEED_VIDEOS: VideoRecord[] = [
     slug: 'v4n8f',
     eventId: 'evt_junina',
     leadId: 'lead_03',
-    url: 'https://assets.mixkit.co/videos/preview/mixkit-countryside-cheerful-party-dancing-40919-large.mp4',
+    url: '', // <-- URL limpa (Sem Mixkit)
     thumbnailUrl: 'https://images.unsplash.com/photo-1508214751196-bcfd4ca60f91?w=300&auto=format&fit=crop&q=60',
     duration: 15,
     status: 'completed',
