@@ -208,17 +208,7 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
         const { data } = supabase.storage.from('videos-processed').getPublicUrl(path);
         const publicUrl = data.publicUrl;
 
-        // Garante evento no banco
-        await (supabase.from('events') as any).upsert({
-          id: event.id, name: event.name,
-          status: event.status || 'active',
-          video_duration_seconds: event.videoDuration,
-          category: event.category || 'Geral',
-          theme_color: event.themeColor || '#6366f1',
-          totem_mode_enabled: true,
-          lead_capture_config: {},
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'id' });
+
 
         // Salva vídeo com UUID válido
         const { error: dbErr } = await (supabase.from('videos') as any).insert({
