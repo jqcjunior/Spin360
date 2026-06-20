@@ -24,8 +24,9 @@ function uuid(): string {
   });
 }
 
-const REC_W = 1080;
-const REC_H = 1920;
+// 1. Resolução otimizada para evitar travamentos em aparelhos intermediários
+const REC_W = 720;
+const REC_H = 1280;
 
 export default function CameraRecorder({ event, lead, onRecordingComplete, onCancel }: Props) {
   const videoRef    = useRef<HTMLVideoElement>(null);
@@ -38,6 +39,7 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
   const chunksRef   = useRef<Blob[]>([]);
   const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
   const safetyRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const audioCtxRef = useRef<any>(null); // Ref para evitar memory leak do AudioContext
 
   const duration = event.videoDuration || 10;
 
@@ -54,7 +56,15 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
     if (safetyRef.current) clearTimeout(safetyRef.current);
     streamRef.current?.getTracks().forEach(t => t.stop());
     streamRef.current = null;
-    try { audioElRef.current?.pause(); } catch {}
+    
+    try { audioElRef.current?.pause(); } 
+    catch (e) { console.error('Erro ao pausar audio na limpeza:', e); }
+
+    // 2. Encerrar o AudioContext para evitar "limit exceeded"
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close().catch((e: any) => console.error('Erro ao fechar AudioContext:', e));
+      audioCtxRef.current = null;
+    }
   }, []);
 
   useEffect(() => () => cleanup(), [cleanup]);
@@ -82,7 +92,7 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
               setFrameUrl(src);
             }
           }
-        } catch {}
+        } catch (e) { console.error('Erro ao carregar moldura:', e); }
       }
 
       // Música
@@ -100,7 +110,7 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
             audioElRef.current.loop = true;
             audioElRef.current.volume = 0.8;
           }
-        } catch {}
+        } catch (e) { console.error('Erro ao carregar musica:', e); }
       }
 
       setPhase('ready');
@@ -120,38 +130,36 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
       if (cancelled) { stream.getTracks().forEach(t => t.stop()); return; }
       streamRef.current = stream;
 
-      // Vídeo visível ao usuário — suporta object-cover normalmente
       const vid = videoRef.current!;
       vid.srcObject = stream;
       vid.muted = true;
       vid.playsInline = true;
-      vid.play().catch(() => {});
+      vid.play().catch((e) => console.error('Erro ao tocar video de preview:', e));
 
-      // Canvas oculto — apenas para a gravação
       const canvas = canvasRef.current!;
       canvas.width  = REC_W;
       canvas.height = REC_H;
       const ctx = canvas.getContext('2d', { alpha: false })!;
 
       const draw = () => {
+        // 3. Fuga do loop infinito: Cancela o frame se o componente foi desmontado
+        if (cancelled) return;
+
         if (vid.readyState >= 2) {
           const vW = vid.videoWidth  || 1280;
           const vH = vid.videoHeight || 720;
-          // Object-cover: escala para preencher 9:16
           const scale   = Math.max(REC_W / vW, REC_H / vH);
           const drawW   = vW * scale;
           const drawH   = vH * scale;
           const offX    = (REC_W - drawW) / 2;
           const offY    = (REC_H - drawH) / 2;
 
-          // Espelha (selfie)
           ctx.save();
           ctx.translate(REC_W, 0);
           ctx.scale(-1, 1);
           ctx.drawImage(vid, offX, offY, drawW, drawH);
           ctx.restore();
 
-          // Moldura por cima
           if (frameImgRef.current?.complete && frameImgRef.current.naturalWidth > 0) {
             ctx.drawImage(frameImgRef.current, 0, 0, REC_W, REC_H);
           }
@@ -160,7 +168,8 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
       };
       draw();
       setCamError(false);
-    }).catch(() => {
+    }).catch((e) => {
+      console.error('Erro ao acessar getUserMedia:', e);
       if (!cancelled) setCamError(true);
     });
 
@@ -171,9 +180,9 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
   const stopRecording = useCallback(() => {
     if (timerRef.current)  { clearInterval(timerRef.current);  timerRef.current  = null; }
     if (safetyRef.current) { clearTimeout(safetyRef.current);  safetyRef.current = null; }
-    try { audioElRef.current?.pause(); } catch {}
+    try { audioElRef.current?.pause(); } catch (e) { console.error('Erro ao pausar audio:', e); }
     if (recorderRef.current?.state !== 'inactive') {
-      try { recorderRef.current?.stop(); } catch {}
+      try { recorderRef.current?.stop(); } catch (e) { console.error('Erro ao parar gravador:', e); }
     }
   }, []);
 
@@ -206,6 +215,7 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
         const { error: upErr } = await supabase.storage
           .from('videos-processed')
           .upload(path, blob, { contentType: blob.type, upsert: true });
+        
         if (!upErr) {
           const { data } = supabase.storage.from('videos-processed').getPublicUrl(path);
           await (supabase.from('videos') as any).insert({
@@ -217,8 +227,10 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
           });
           const v = SpinDb.getVideos().find((x: any) => x.id === videoId);
           if (v) SpinDb.saveVideo({ ...v, url: data.publicUrl, status: 'completed' });
+        } else {
+          console.error('Erro no upload do Supabase Storage:', upErr);
         }
-      } catch {}
+      } catch (e) { console.error('Erro geral no fluxo de upload:', e); }
     }
   }, [event, lead, duration, cleanup, onRecordingComplete]);
 
@@ -228,52 +240,63 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
     const stream = streamRef.current;
     if (!canvas || !stream) return;
 
-    try { audioElRef.current?.play().catch(() => {}); } catch {}
+    try { audioElRef.current?.play().catch((e) => console.error('Erro play musica:', e)); } 
+    catch (e) { console.error('Erro geral play musica:', e); }
 
-    // Tenta usar canvas (com moldura) para vídeo
     let recordStream = stream;
     try {
-      const cs = (canvas as any).captureStream(30) as MediaStream;
+      let cs: MediaStream | null = null;
+      try {
+        cs = (canvas as any).captureStream(30) as MediaStream;
+      } catch (canvasErr) {
+        console.error('Erro de CORS/Segurança no Canvas:', canvasErr);
+      }
       
-      // Captura o áudio (com suporte especial para iPhone/Safari)
-      let audioStream: MediaStream | null = null;
-      if (audioElRef.current) {
-        const audioEl = audioElRef.current as any;
-        
-        if (audioEl.captureStream) {
-          audioStream = audioEl.captureStream(); // Chrome/Android
-        } else if (audioEl.mozCaptureStream) {
-          audioStream = audioEl.mozCaptureStream(); // Firefox
-        } else {
-          // Fallback obrigatório para iPhone (iOS não tem captureStream em mídia)
-          const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-          if (AudioCtx && !audioEl._hasAudioNode) {
-            const actx = new AudioCtx();
-            const dest = actx.createMediaStreamDestination();
-            const source = actx.createMediaElementSource(audioEl);
-            source.connect(dest);
-            source.connect(actx.destination); // Conecta à saída para continuar tocando
-            audioEl._hasAudioNode = true;
-            audioEl._audioStream = dest.stream;
-          }
-          audioStream = audioEl._audioStream || null;
+      let mixedAudioTracks: MediaStreamTrack[] = [];
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+
+      // 4. Mixer nativo (Combina Microfone + Música)
+      if (AudioCtx) {
+        if (!audioCtxRef.current) audioCtxRef.current = new AudioCtx();
+        const actx = audioCtxRef.current;
+        const dest = actx.createMediaStreamDestination();
+
+        // Insere o microfone no Mixer
+        if (stream.getAudioTracks().length > 0) {
+          const micSource = actx.createMediaStreamSource(stream);
+          micSource.connect(dest);
         }
+
+        // Insere a música no Mixer
+        if (audioElRef.current) {
+          const audioEl = audioElRef.current as any;
+          if (!audioEl._sourceNode) {
+            audioEl._sourceNode = actx.createMediaElementSource(audioEl);
+          }
+          audioEl._sourceNode.connect(dest);
+          audioEl._sourceNode.connect(actx.destination); // Retorna a saída principal para ouvir
+        }
+
+        mixedAudioTracks = dest.stream.getAudioTracks();
+      } else {
+        // Fallback caso não suporte AudioContext (mantém o microfone)
+        mixedAudioTracks = stream.getAudioTracks();
       }
 
-      const musicTracks = audioStream ? audioStream.getAudioTracks() : [];
+      const videoTracks = cs && cs.getVideoTracks().length > 0 ? cs.getVideoTracks() : stream.getVideoTracks();
 
-      if (cs.getVideoTracks().length > 0) {
-        // Junta o vídeo da moldura com o áudio processado
-        recordStream = new MediaStream([
-          cs.getVideoTracks()[0],
-          ...musicTracks
-        ]);
-      }
+      // Monta o stream unificado com o áudio já mixado
+      recordStream = new MediaStream([
+        ...videoTracks,
+        ...mixedAudioTracks
+      ]);
+
     } catch (e) {
-      console.error('Erro ao capturar stream no iOS. Usando câmera pura:', e);
+      console.error('Erro geral ao montar Mixer/Stream. Usando câmera pura:', e);
     }
 
-    const mimeType = ['video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']
+    // 5. WebM priorizado (mais seguro em navegadores web e Android, cai pra MP4 se iOS forçar)
+    const mimeType = ['video/webm;codecs=vp9,opus', 'video/webm', 'video/mp4']
       .find(t => MediaRecorder.isTypeSupported(t)) || '';
 
     chunksRef.current = [];
@@ -302,6 +325,22 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
 
   // ── Contagem ──────────────────────────────────────────────────────────────
   const startCountdown = useCallback(() => {
+    // Destrava o áudio e o AudioContext no exato clique do usuário para driblar a trava da Apple
+    if (audioElRef.current) {
+      audioElRef.current.play().then(() => {
+        audioElRef.current?.pause();
+        audioElRef.current!.currentTime = 0;
+      }).catch((e) => console.error('Erro ao destravar audio nativo:', e));
+    }
+
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (AudioCtx && !audioCtxRef.current) {
+      audioCtxRef.current = new AudioCtx();
+      if (audioCtxRef.current.state === 'suspended') {
+        audioCtxRef.current.resume().catch((e:any) => console.error('Erro ao resumir AudioContext:', e));
+      }
+    }
+
     setPhase('countdown');
     let c = 3; setCountdown(c);
     const t = setInterval(() => {
@@ -320,8 +359,8 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
     <div className="fixed inset-0 z-[200] bg-black">
       <audio ref={audioElRef} playsInline crossOrigin="anonymous" />
 
-      {/* Canvas OCULTO (Fora da tela para o iOS não congelar a renderização) */}
-      <canvas ref={canvasRef} style={{ position: 'absolute', left: '-9999px' }} />
+      {/* Canvas OCULTO (Na tela, mas invisível para o Safari não congelar) */}
+      <canvas ref={canvasRef} style={{ position: 'absolute', zIndex: -1, opacity: 0.01, pointerEvents: 'none' }} />
 
       {/* PREVIEW: vídeo com object-cover (correto em todos os dispositivos) */}
       <video
