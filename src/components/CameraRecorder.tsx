@@ -307,9 +307,16 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
 
     let recordStream = stream;
     try {
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+                   (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
       let cs: MediaStream | null = null;
       try {
-        cs = (canvas as any).captureStream(30) as MediaStream;
+        // O PULO DO GATO: Se for iOS, nós nem tentamos capturar o Canvas, 
+        // pois isso causa o congelamento (vídeo estático) no Safari.
+        if (!isIOS) {
+          cs = (canvas as any).captureStream(30) as MediaStream;
+        }
       } catch (canvasErr) {
         LoggerService.error({
           module: 'CameraRecorder',
@@ -323,29 +330,25 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
 
       if (mixer) {
         mixer.createMixer();
-        
-        // Mantido como você ajustou: a música no elemento HTML.
         if (audioElRef.current) {
           mixer.connectMusic(audioElRef.current);
         }
         mixedAudioTracks = mixer.getMixedTracks();
       }
 
-      const videoTracks = cs && cs.getVideoTracks().length > 0 ? cs.getVideoTracks() : stream.getVideoTracks();
+      // Se for iOS, pega o vídeo limpo e direto da câmera (sem travar). 
+      // Se for Android/PC, pega o vídeo com a moldura já desenhada no Canvas.
+      const videoTracks = (!isIOS && cs && cs.getVideoTracks().length > 0) 
+        ? cs.getVideoTracks() 
+        : stream.getVideoTracks();
 
-      // ==============================================================
-      // SOLUÇÃO PARA O IOS: FORÇAR CAPTURA DO ÁUDIO FÍSICO
-      // ==============================================================
-      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
-                   (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-
-      // O Safari buga com mixedAudioTracks e entrega um vídeo mudo.
-      // Se for iOS, pegamos as trilhas do microfone nativo (stream.getAudioTracks()),
-      // que vai escutar a música que o próprio celular está tocando no alto-falante.
+      // ÁUDIO: iOS usa o microfone para escutar a música do alto-falante. Outros usam o áudio digital.
       const rawAudioTracks = stream.getAudioTracks();
-      const finalAudioTracks = (isIOS && rawAudioTracks.length > 0) ? rawAudioTracks : mixedAudioTracks;
+      const finalAudioTracks = (isIOS && rawAudioTracks.length > 0) 
+        ? rawAudioTracks 
+        : mixedAudioTracks;
 
-      // Monta o stream unificado com o áudio que o iOS consegue gravar
+      // Monta o stream unificado final, totalmente a prova de bugs da Apple
       recordStream = new MediaStream([
         ...videoTracks,
         ...finalAudioTracks
