@@ -22,8 +22,13 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Pro
   const [error, setError]       = useState('');
 
   const isSupabaseUrl = localVideo.url.startsWith('https://');
-  const shareUrl = `${window.location.origin}?v=${localVideo.slug}`;
+  const shareUrl = localVideo.url;
   const qrUrl    = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(shareUrl)}&bgcolor=0f172a&color=ffffff&margin=10`;
+
+  useEffect(() => {
+    console.log('VIDEO URL', localVideo.url);
+    console.log('SHARE URL', shareUrl);
+  }, [localVideo.url, shareUrl]);
 
   // Update localVideo state if video prop changes
   useEffect(() => {
