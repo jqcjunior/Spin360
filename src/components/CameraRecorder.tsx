@@ -320,81 +320,111 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
   // ── Inicia gravação ───────────────────────────────────────────────────────
   const startRecording = useCallback(() => {
     const canvas = canvasRef.current;
-    const stream = streamRef.current;
-    if (!canvas || !stream) return;
+    if (!canvas) return;
 
-    let recordStream = stream;
+    const tempVideoId = uuid();
+
+    console.log('[MUSIC_ONLY_MODE]', {
+      eventId: event.id,
+      videoId: tempVideoId,
+      musicId: event.musicId,
+      duration
+    });
+    LoggerService.log({
+      module: 'CameraRecorder',
+      action: 'MUSIC_ONLY_MODE',
+      metadata: { eventId: event.id, videoId: tempVideoId, musicId: event.musicId, duration }
+    });
+
+    let canvasStream: MediaStream | null = null;
     try {
-      let cs: MediaStream | null = null;
-      try {
-        // Agora que o Canvas é visualmente visível na tela e ativo,
-        // o captureStream funciona perfeitamente em TODAS as plataformas, inclusive iOS Safari.
-        const c = canvas as any;
-        if (c.captureStream) {
-          cs = c.captureStream(30);
-        } else if (c.mozCaptureStream) {
-          cs = c.mozCaptureStream(30);
-        }
-      } catch (canvasErr) {
-        LoggerService.error({
-          module: 'CameraRecorder',
-          action: 'canvas_captureStream',
-          error: canvasErr,
-        });
+      const c = canvas as any;
+      if (c.captureStream) {
+        canvasStream = c.captureStream(30);
+      } else if (c.mozCaptureStream) {
+        canvasStream = c.mozCaptureStream(30);
       }
+    } catch (canvasErr) {
+      LoggerService.error({
+        module: 'CameraRecorder',
+        action: 'canvas_captureStream',
+        error: canvasErr,
+      });
+    }
 
+    if (canvasStream) {
       console.log('[CANVAS_STREAM_CREATED]', {
         eventId: event.id,
-        videoId: uuid(), // provisorio, finish cria o definitivo
-        width: REC_W,
-        height: REC_H
+        videoId: tempVideoId,
+        musicId: event.musicId,
+        width: canvas.width,
+        height: canvas.height
       });
       LoggerService.log({
         module: 'CameraRecorder',
         action: 'CANVAS_STREAM_CREATED',
-        metadata: { eventId: event.id, width: REC_W, height: REC_H }
-      });
-      
-      let mixedAudioTracks: MediaStreamTrack[] = [];
-      const mixer = audioMixerServiceRef.current;
-
-      if (mixer) {
-        mixer.createMixer();
-        mixer.startMusic(audioElRef.current, true);
-        mixedAudioTracks = mixer.getMixedTracks();
-      }
-
-      console.log('[AUDIO_MIX_CREATED]', {
-        eventId: event.id,
-        musicId: event.musicId,
-        hasTracks: mixedAudioTracks.length > 0
-      });
-      LoggerService.log({
-        module: 'CameraRecorder',
-        action: 'AUDIO_MIX_CREATED',
-        metadata: { eventId: event.id, musicId: event.musicId, hasTracks: mixedAudioTracks.length > 0 }
-      });
-
-      // GRAVANDO O CANVAS (Para que a moldura apareça) em todos os navegadores, inclusive iOS
-      const videoTracks = (cs && cs.getVideoTracks().length > 0) 
-        ? cs.getVideoTracks() 
-        : stream.getVideoTracks();
-
-      // Monta o stream unificado final contendo o vídeo do canvas e o áudio da música
-      recordStream = new MediaStream([
-        ...videoTracks,
-        ...mixedAudioTracks
-      ]);
-
-    } catch (e) {
-      LoggerService.error({
-        module: 'CameraRecorder',
-        action: 'build_recordStream',
-        error: e,
+        metadata: { eventId: event.id, videoId: tempVideoId, width: canvas.width, height: canvas.height }
       });
     }
 
-    recordingServiceRef.current?.startRecording(recordStream, (blob) => {
+    let mixedTracks: MediaStreamTrack[] = [];
+    const mixer = audioMixerServiceRef.current;
+
+    if (mixer) {
+      mixer.createMixer();
+      mixer.startMusic(audioElRef.current, true);
+      mixedTracks = mixer.getMixedTracks();
+
+      if (mixedTracks.length > 0) {
+        console.log('[MUSIC_TRACK_FOUND]', {
+          eventId: event.id,
+          videoId: tempVideoId,
+          musicId: event.musicId,
+          trackId: mixedTracks[0].id
+        });
+        LoggerService.log({
+          module: 'CameraRecorder',
+          action: 'MUSIC_TRACK_FOUND',
+          metadata: { eventId: event.id, videoId: tempVideoId, musicId: event.musicId, trackId: mixedTracks[0].id }
+        });
+      }
+    }
+
+    const videoTracks = canvasStream ? canvasStream.getVideoTracks() : [];
+
+    if (mixedTracks.length > 0) {
+      console.log('[MUSIC_TRACK_ATTACHED]', {
+        eventId: event.id,
+        videoId: tempVideoId,
+        musicId: event.musicId,
+        trackLabel: mixedTracks[0].label
+      });
+      LoggerService.log({
+        module: 'CameraRecorder',
+        action: 'MUSIC_TRACK_ATTACHED',
+        metadata: { eventId: event.id, videoId: tempVideoId, musicId: event.musicId, trackLabel: mixedTracks[0].label }
+      });
+    }
+
+    const finalStream = new MediaStream([
+      ...videoTracks,
+      ...mixedTracks
+    ]);
+
+    console.log('[FINAL_STREAM_CREATED]', {
+      eventId: event.id,
+      videoId: tempVideoId,
+      musicId: event.musicId,
+      videoTracksCount: videoTracks.length,
+      audioTracksCount: mixedTracks.length
+    });
+    LoggerService.log({
+      module: 'CameraRecorder',
+      action: 'FINAL_STREAM_CREATED',
+      metadata: { eventId: event.id, videoId: tempVideoId, musicId: event.musicId, videoTracksCount: videoTracks.length, audioTracksCount: mixedTracks.length }
+    });
+
+    recordingServiceRef.current?.startRecording(finalStream, (blob) => {
       finish(blob);
     });
 

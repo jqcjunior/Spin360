@@ -9,7 +9,7 @@ export class CameraService {
 
       this.stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        audio: false,
       });
 
       return this.stream;
