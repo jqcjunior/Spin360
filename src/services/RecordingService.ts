@@ -40,6 +40,17 @@ export class RecordingService {
       rec.onstop = () => {
         const finalMime = mimeType || 'video/webm';
         const blob = new Blob(this.chunks, { type: finalMime });
+
+        console.log('[VIDEO_RENDER_COMPLETED]', {
+          fileSize: blob.size,
+          mimeType: finalMime,
+        });
+        LoggerService.log({
+          module: 'RecordingService',
+          action: 'VIDEO_RENDER_COMPLETED',
+          metadata: { fileSize: blob.size, mimeType: finalMime }
+        });
+
         if (this.onStopCallback) {
           this.onStopCallback(blob, finalMime);
         }
@@ -48,10 +59,14 @@ export class RecordingService {
       // CORREÇÃO APLICADA AQUI: Gravação contínua, sem fatiamento para o iOS
       rec.start();
 
+      console.log('[MEDIA_RECORDER_STARTED]', {
+        mimeType,
+        videoBitsPerSecond: 2_500_000,
+      });
       LoggerService.log({
         module: 'RecordingService',
-        action: 'startRecording',
-        metadata: { mimeType, videoBitsPerSecond: 2500000 },
+        action: 'MEDIA_RECORDER_STARTED',
+        metadata: { mimeType, videoBitsPerSecond: 2_500_000 }
       });
 
       return rec;
@@ -69,9 +84,10 @@ export class RecordingService {
     if (this.recorder && this.recorder.state !== 'inactive') {
       try {
         this.recorder.stop();
+        console.log('[MEDIA_RECORDER_STOPPED]');
         LoggerService.log({
           module: 'RecordingService',
-          action: 'stopRecording',
+          action: 'MEDIA_RECORDER_STOPPED',
         });
       } catch (error) {
         LoggerService.error({

@@ -57,61 +57,81 @@ export class AudioMixerService {
     }
   }
 
-  // AJUSTE: Transformar a tag <audio> em um Buffer de Memória puro para o Safari
-  connectMusic(audioElement: HTMLAudioElement) {
-    if (!this.audioCtx || !this.destination) return;
-    
-    // Limpa execuções anteriores
-    if (this.bufferSource) {
-      try { this.bufferSource.disconnect(); } catch (e) {}
-      this.bufferSource = null;
-    }
-
+  // AJUSTE: Carregar e decodificar a música em um Buffer de Memória antes de iniciar a gravação
+  async preloadMusic(url: string): Promise<void> {
     try {
-      // 1. Mutamos o elemento original para não dar eco. Quem vai tocar a música agora é o Buffer.
-      audioElement.muted = true;
+      this.createMixer();
+      if (!this.audioCtx) return;
 
-      // 2. Criamos o carregador em memória
-      const loadBuffer = async () => {
-        if (!this.audioCtx || !this.destination) return;
-        
-        try {
-          // Pega o arquivo que já está em cache local (blob)
-          const response = await fetch(audioElement.src);
-          const arrayBuffer = await response.arrayBuffer();
-          
-          // Decodifica o áudio blindado (Isso ignora os bloqueios do iOS)
-          this.audioBuffer = await this.audioCtx.decodeAudioData(arrayBuffer);
-          
-          this.bufferSource = this.audioCtx.createBufferSource();
-          this.bufferSource.buffer = this.audioBuffer;
-          this.bufferSource.loop = audioElement.loop;
-          
-          // Conecta na gravação (destination) E nas caixas de som do celular (audioCtx.destination)
-          this.bufferSource.connect(this.destination);
-          this.bufferSource.connect(this.audioCtx.destination);
-          
-          this.bufferSource.start(0);
-        } catch (err) {
-          LoggerService.error({
-            module: 'AudioMixerService',
-            action: 'connectMusic_bufferDecode',
-            error: err,
-          });
-          
-          // Se o plano A falhar (ex: navegador muito antigo), volta para o plano B original
-          this.fallbackConnectMusic(audioElement);
-        }
-      };
+      LoggerService.log({
+        module: 'AudioMixerService',
+        action: 'preloadMusic_started',
+        metadata: { url }
+      });
 
-      loadBuffer();
+      const response = await fetch(url);
+      const arrayBuffer = await response.arrayBuffer();
+      this.audioBuffer = await this.audioCtx.decodeAudioData(arrayBuffer);
+
+      LoggerService.log({
+        module: 'AudioMixerService',
+        action: 'preloadMusic_completed',
+        metadata: { duration: this.audioBuffer.duration }
+      });
     } catch (error) {
       LoggerService.error({
         module: 'AudioMixerService',
-        action: 'connectMusic_general',
-        error,
+        action: 'preloadMusic_failed',
+        error
+      });
+    }
+  }
+
+  // Toca a música usando o Buffer decodificado, com fallback para reprodução direta caso falhe
+  startMusic(audioElement?: HTMLAudioElement, loop: boolean = true) {
+    if (!this.audioCtx || !this.destination) return;
+
+    // Se temos o Buffer decodificado, iniciamos a reprodução digital sem atraso
+    if (this.audioBuffer) {
+      if (this.bufferSource) {
+        try { this.bufferSource.stop(); } catch (e) {}
+        try { this.bufferSource.disconnect(); } catch (e) {}
+        this.bufferSource = null;
+      }
+
+      this.bufferSource = this.audioCtx.createBufferSource();
+      this.bufferSource.buffer = this.audioBuffer;
+      this.bufferSource.loop = loop;
+
+      // Conecta no gravador e nas caixas de som do dispositivo
+      this.bufferSource.connect(this.destination);
+      this.bufferSource.connect(this.audioCtx.destination);
+
+      LoggerService.log({
+        module: 'AudioMixerService',
+        action: 'startMusic_buffer_started',
+      });
+      
+      this.bufferSource.start(0);
+
+      if (audioElement) {
+        audioElement.muted = true;
+        try { audioElement.pause(); } catch (e) {}
+      }
+    } else if (audioElement) {
+      // Se não houver Buffer carregado, recorre ao método legado do Elemento de Áudio
+      LoggerService.log({
+        module: 'AudioMixerService',
+        action: 'startMusic_fallback_mediaelement',
       });
       this.fallbackConnectMusic(audioElement);
+      audioElement.play().catch(e => {
+        LoggerService.error({
+          module: 'AudioMixerService',
+          action: 'startMusic_fallback_play_failed',
+          error: e
+        });
+      });
     }
   }
 
@@ -149,6 +169,22 @@ export class AudioMixerService {
         error,
       });
     }
+  }
+
+  // Interrompe a reprodução da música de forma limpa
+  stopMusic(audioElement?: HTMLAudioElement) {
+    if (this.bufferSource) {
+      try { this.bufferSource.stop(); } catch (e) {}
+      try { this.bufferSource.disconnect(); } catch (e) {}
+      this.bufferSource = null;
+    }
+    if (audioElement) {
+      try { audioElement.pause(); } catch (e) {}
+    }
+    LoggerService.log({
+      module: 'AudioMixerService',
+      action: 'stopMusic_completed',
+    });
   }
 
   getMixedTracks(): MediaStreamTrack[] {

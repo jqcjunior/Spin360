@@ -36,6 +36,19 @@ export class UploadService {
     const cleanBlob = new Blob([blob], { type: cleanMime });
     const path = `${eventId}/${slug}.${ext}`;
 
+    console.log('[UPLOAD_STARTED]', {
+      eventId,
+      videoId,
+      slug,
+      fileSize: cleanBlob.size,
+      mimeType: cleanMime
+    });
+    LoggerService.log({
+      module: 'UploadService',
+      action: 'UPLOAD_STARTED',
+      metadata: { eventId, videoId, slug, fileSize: cleanBlob.size, mimeType: cleanMime }
+    });
+
     while (retryCount < maxRetries && !success) {
       try {
         LoggerService.log({
@@ -54,6 +67,18 @@ export class UploadService {
         const { data } = supabase.storage.from('videos-processed').getPublicUrl(path);
         publicUrl = data.publicUrl;
 
+        console.log('[VIDEO_URL_CREATED]', {
+          publicUrl,
+          eventId,
+          videoId,
+          slug
+        });
+        LoggerService.log({
+          module: 'UploadService',
+          action: 'VIDEO_URL_CREATED',
+          metadata: { publicUrl, eventId, videoId, slug }
+        });
+
         const { error: dbErr } = await (supabase.from('videos') as any).insert({
           id: videoId,
           event_id: eventId,
@@ -69,6 +94,19 @@ export class UploadService {
         if (dbErr) throw dbErr;
 
         success = true;
+
+        console.log('[UPLOAD_COMPLETED]', {
+          eventId,
+          videoId,
+          slug,
+          publicUrl,
+          retryCount
+        });
+        LoggerService.log({
+          module: 'UploadService',
+          action: 'UPLOAD_COMPLETED',
+          metadata: { eventId, videoId, slug, publicUrl, retryCount }
+        });
 
         // Update local database
         const v = SpinDb.getVideos().find((x: any) => x.id === videoId);

@@ -41,6 +41,7 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
   const safetyRef     = useRef<any>(null);
   const createdUrlsRef = useRef<string[]>([]);
   const recordingStartTimeRef = useRef<number | null>(null);
+  const drawingActiveRef = useRef<boolean>(false);
 
   // Instâncias de Serviços segregados
   const cameraServiceRef     = useRef<CameraService | null>(null);
@@ -61,6 +62,7 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
 
   // ── Limpeza ──────────────────────────────────────────────────────────────
   const cleanup = useCallback(() => {
+    drawingActiveRef.current = false;
     if (animRef.current)   cancelAnimationFrame(animRef.current);
     if (timerRef.current)  clearTimeout(timerRef.current);
     if (safetyRef.current) clearTimeout(safetyRef.current);
@@ -145,6 +147,15 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
             audioElRef.current.src = src;
             audioElRef.current.loop = true;
             audioElRef.current.volume = 0.8;
+
+            // Precarrega o buffer de áudio no mixer digital
+            audioMixerServiceRef.current?.preloadMusic(src).catch(err => {
+              LoggerService.error({
+                module: 'CameraRecorder',
+                action: 'preload_music_error',
+                error: err
+              });
+            });
           }
         } catch (e) {
           LoggerService.error({
@@ -162,8 +173,8 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
 
   // ── Câmera e loop de desenho no Canvas ────────────────────────────────────
   useEffect(() => {
-    if (phase !== 'ready') return;
     let cancelled = false;
+    drawingActiveRef.current = true;
 
     cameraServiceRef.current?.startCamera()
       .then(stream => {
@@ -174,26 +185,29 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
         streamRef.current = stream;
 
         const vid = videoRef.current!;
-        vid.srcObject = stream;
-        vid.muted = true;
-        vid.playsInline = true;
-        vid.play().catch((e) => {
-          LoggerService.error({
-            module: 'CameraRecorder',
-            action: 'play_preview_video',
-            error: e,
+        if (vid) {
+          vid.srcObject = stream;
+          vid.muted = true;
+          vid.playsInline = true;
+          vid.play().catch((e) => {
+            LoggerService.error({
+              module: 'CameraRecorder',
+              action: 'play_preview_video',
+              error: e,
+            });
           });
-        });
+        }
 
         const canvas = canvasRef.current!;
+        if (!canvas) return;
         canvas.width  = REC_W;
         canvas.height = REC_H;
         const ctx = canvas.getContext('2d', { alpha: false })!;
 
         const draw = () => {
-          if (cancelled) return;
+          if (!drawingActiveRef.current || cancelled) return;
 
-          if (vid.readyState >= 2) {
+          if (vid && vid.readyState >= 2) {
             const vW = vid.videoWidth  || 1280;
             const vH = vid.videoHeight || 720;
             const scale   = Math.max(REC_W / vW, REC_H / vH);
@@ -226,8 +240,11 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
         if (!cancelled) setCamError(true);
       });
 
-    return () => { cancelled = true; };
-  }, [phase]);
+    return () => {
+      cancelled = true;
+      drawingActiveRef.current = false;
+    };
+  }, []);
 
   // ── Para gravação ─────────────────────────────────────────────────────────
   const stopRecording = useCallback(() => {
@@ -235,7 +252,12 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
     if (safetyRef.current) { clearTimeout(safetyRef.current);  safetyRef.current = null; }
     recordingStartTimeRef.current = null;
 
-    try { audioElRef.current?.pause(); } 
+    try {
+      const mixer = audioMixerServiceRef.current;
+      if (mixer) {
+        mixer.stopMusic(audioElRef.current);
+      }
+    } 
     catch (e) {
       LoggerService.error({
         module: 'CameraRecorder',
@@ -254,6 +276,18 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
     const videoId = uuid();
     const localUrl = URL.createObjectURL(blob);
     createdUrlsRef.current.push(localUrl);
+
+    console.log('[VIDEO_URL_CREATED]', {
+      publicUrl: localUrl,
+      eventId: event.id,
+      videoId,
+      slug
+    });
+    LoggerService.log({
+      module: 'CameraRecorder',
+      action: 'VIDEO_URL_CREATED',
+      metadata: { publicUrl: localUrl, eventId: event.id, videoId, slug }
+    });
 
     const record: VideoRecord = {
       id: videoId, slug, eventId: event.id, leadId: lead?.id,
@@ -289,33 +323,17 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
     const stream = streamRef.current;
     if (!canvas || !stream) return;
 
-    try {
-      audioElRef.current?.play().catch((e) => {
-        LoggerService.error({
-          module: 'CameraRecorder',
-          action: 'startRecording_playMusic',
-          error: e,
-        });
-      });
-    } catch (e) {
-      LoggerService.error({
-        module: 'CameraRecorder',
-        action: 'startRecording_playMusic_general',
-        error: e,
-      });
-    }
-
     let recordStream = stream;
     try {
-      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
-                   (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-
       let cs: MediaStream | null = null;
       try {
-        // O PULO DO GATO: Se for iOS, nós nem tentamos capturar o Canvas, 
-        // pois isso causa o congelamento (vídeo estático) no Safari.
-        if (!isIOS) {
-          cs = (canvas as any).captureStream(30) as MediaStream;
+        // Agora que o Canvas é visualmente visível na tela e ativo,
+        // o captureStream funciona perfeitamente em TODAS as plataformas, inclusive iOS Safari.
+        const c = canvas as any;
+        if (c.captureStream) {
+          cs = c.captureStream(30);
+        } else if (c.mozCaptureStream) {
+          cs = c.mozCaptureStream(30);
         }
       } catch (canvasErr) {
         LoggerService.error({
@@ -324,34 +342,48 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
           error: canvasErr,
         });
       }
+
+      console.log('[CANVAS_STREAM_CREATED]', {
+        eventId: event.id,
+        videoId: uuid(), // provisorio, finish cria o definitivo
+        width: REC_W,
+        height: REC_H
+      });
+      LoggerService.log({
+        module: 'CameraRecorder',
+        action: 'CANVAS_STREAM_CREATED',
+        metadata: { eventId: event.id, width: REC_W, height: REC_H }
+      });
       
       let mixedAudioTracks: MediaStreamTrack[] = [];
       const mixer = audioMixerServiceRef.current;
 
       if (mixer) {
         mixer.createMixer();
-        if (audioElRef.current) {
-          mixer.connectMusic(audioElRef.current);
-        }
+        mixer.startMusic(audioElRef.current, true);
         mixedAudioTracks = mixer.getMixedTracks();
       }
 
-      // Se for iOS, pega o vídeo limpo e direto da câmera (sem travar). 
-      // Se for Android/PC, pega o vídeo com a moldura já desenhada no Canvas.
-      const videoTracks = (!isIOS && cs && cs.getVideoTracks().length > 0) 
+      console.log('[AUDIO_MIX_CREATED]', {
+        eventId: event.id,
+        musicId: event.musicId,
+        hasTracks: mixedAudioTracks.length > 0
+      });
+      LoggerService.log({
+        module: 'CameraRecorder',
+        action: 'AUDIO_MIX_CREATED',
+        metadata: { eventId: event.id, musicId: event.musicId, hasTracks: mixedAudioTracks.length > 0 }
+      });
+
+      // GRAVANDO O CANVAS (Para que a moldura apareça) em todos os navegadores, inclusive iOS
+      const videoTracks = (cs && cs.getVideoTracks().length > 0) 
         ? cs.getVideoTracks() 
         : stream.getVideoTracks();
 
-      // ÁUDIO: iOS usa o microfone para escutar a música do alto-falante. Outros usam o áudio digital.
-      const rawAudioTracks = stream.getAudioTracks();
-      const finalAudioTracks = (isIOS && rawAudioTracks.length > 0) 
-        ? rawAudioTracks 
-        : mixedAudioTracks;
-
-      // Monta o stream unificado final, totalmente a prova de bugs da Apple
+      // Monta o stream unificado final contendo o vídeo do canvas e o áudio da música
       recordStream = new MediaStream([
         ...videoTracks,
-        ...finalAudioTracks
+        ...mixedAudioTracks
       ]);
 
     } catch (e) {
@@ -385,10 +417,22 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
     timerRef.current = setTimeout(runTimer, 100);
 
     safetyRef.current = setTimeout(() => stopRecording(), (duration + 3) * 1000);
-  }, [duration, finish, stopRecording]);
+  }, [event, duration, finish, stopRecording]);
 
   // ── Contagem ──────────────────────────────────────────────────────────────
   const startCountdown = useCallback(() => {
+    console.log('[VIDEO_CAPTURE_STARTED]', {
+      eventId: event.id,
+      frameId: event.frameId,
+      musicId: event.musicId,
+      duration
+    });
+    LoggerService.log({
+      module: 'CameraRecorder',
+      action: 'VIDEO_CAPTURE_STARTED',
+      metadata: { eventId: event.id, frameId: event.frameId, musicId: event.musicId, duration }
+    });
+
     // Destrava o áudio e o AudioContext no exato clique do usuário para driblar a trava da Apple
     if (audioElRef.current) {
       audioElRef.current.play().then(() => {
@@ -429,7 +473,7 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
       c--; setCountdown(c);
       if (c <= 0) { clearInterval(t); startRecording(); }
     }, 1000);
-  }, [startRecording]);
+  }, [event, duration, startRecording]);
 
   const cancel = useCallback(() => {
     stopRecording(); cleanup(); onCancel();
@@ -441,25 +485,19 @@ export default function CameraRecorder({ event, lead, onRecordingComplete, onCan
     <div className="fixed inset-0 z-[200] bg-black">
       <audio ref={audioElRef} playsInline crossOrigin="anonymous" />
 
-      {/* Canvas OCULTO (Na tela, mas invisível para o Safari não congelar) */}
-      <canvas ref={canvasRef} style={{ position: 'absolute', zIndex: -1, opacity: 0.01, pointerEvents: 'none' }} />
+      {/* O Canvas é a PRÉVIA VISÍVEL REAL que renderiza a 60fps com moldura integrada, evitando congelamento no Safari */}
+      <canvas
+        ref={canvasRef}
+        className="absolute inset-0 w-full h-full object-cover z-0"
+      />
 
-      {/* PREVIEW: vídeo com object-cover (correto em todos os dispositivos) */}
+      {/* Elemento de vídeo offscreen usado como fonte para alimentar a renderização do Canvas */}
       <video
         ref={videoRef}
         autoPlay playsInline muted
-        className="absolute inset-0 w-full h-full object-cover"
-        style={{ transform: 'scaleX(-1)' }}
+        className="absolute pointer-events-none opacity-0"
+        style={{ width: '1px', height: '1px', top: '-1000px', left: '-1000px' }}
       />
-
-      {/* Moldura sobre o vídeo — object-cover funciona em img */}
-      {frameUrl && (
-        <img
-          src={frameUrl}
-          alt=""
-          className="absolute inset-0 w-full h-full object-cover pointer-events-none z-10"
-        />
-      )}
 
       {/* Loading */}
       {phase === 'loading' && (

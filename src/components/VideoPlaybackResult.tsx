@@ -138,6 +138,12 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Pro
     const t0 = performance.now();
     console.log('[LOG] SHARE_START', localVideo.id);
 
+    console.log('[DOWNLOAD_STARTED]', {
+      url: localVideo.url,
+      slug: localVideo.slug,
+      videoId: localVideo.id
+    });
+
     // Timeout de 30s para a requisição
     const controller = new AbortController();
     const fetchTimeoutId = setTimeout(() => controller.abort(), 30000);
@@ -152,6 +158,12 @@ export default function VideoPlaybackResult({ video, event, onRecordAgain }: Pro
       const blob = await response.blob();
       const blobMime = blob.type || (localVideo.url.includes('.webm') ? 'video/webm' : 'video/mp4');
       const ext = blobMime.includes('webm') ? 'webm' : 'mp4';
+
+      console.log('[DOWNLOAD_COMPLETED]', {
+        url: localVideo.url,
+        slug: localVideo.slug,
+        fileSize: blob.size
+      });
 
       // Empacota o blob em um arquivo formal que a Apple aceita
       const file = new File([blob], `Real360_${localVideo.slug}.${ext}`, { type: blobMime });
